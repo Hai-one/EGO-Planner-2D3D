@@ -1,8 +1,8 @@
 # EGO-Planner for Odin
 
-基于 [ZJU-FAST-Lab/ego-planner-swarm](https://github.com/ZJU-FAST-Lab/ego-planner-swarm) 修改，适配 **Odin1 飞控 + Livox Mid-360 LiDAR + RK3588** 的实体无人机导航系统。
+基于 [ZJU-FAST-Lab/ego-planner-swarm](https://github.com/ZJU-FAST-Lab/ego-planner-swarm) 修改，适配 **Odin1 深度摄像头 + RK3588** 的实体无人机导航系统（同时兼容 Livox Mid-360 LiDAR 点云输入）。
 
-Modified from [ZJU-FAST-Lab/ego-planner-swarm](https://github.com/ZJU-FAST-Lab/ego-planner-swarm), adapted for **Odin1 FC + Livox Mid-360 + RK3588** real-world drone navigation.
+Modified from [ZJU-FAST-Lab/ego-planner-swarm](https://github.com/ZJU-FAST-Lab/ego-planner-swarm), adapted for **Odin1 depth camera + RK3588** real-world drone navigation (also compatible with Livox Mid-360 LiDAR).
 
 ---
 
@@ -11,8 +11,8 @@ Modified from [ZJU-FAST-Lab/ego-planner-swarm](https://github.com/ZJU-FAST-Lab/e
 | 组件 | 型号 |
 |------|------|
 | 机载计算机 | RK3588 (LubanCat) |
-| 飞控 | Odin1 |
-| LiDAR | Livox Mid-360 |
+| 深度摄像头 | Odin1 (里程计 + 深度图 + SLAM 点云) |
+| 激光雷达 (可选) | Livox Mid-360 (点云直连模式) |
 | 系统 | Ubuntu 22.04 |
 | 中间件 | ROS 2 Humble |
 
@@ -25,7 +25,7 @@ Modified from [ZJU-FAST-Lab/ego-planner-swarm](https://github.com/ZJU-FAST-Lab/e
 - ✅ **ROS 2 Action 导航接口** — `NavigateToPose.action`，支持反馈、取消、错误码
 - ✅ **Z 轴规划使能开关** — `fsm/enable_z_planning`，可锁定高度仅做 XY 平面导航
 - ✅ **独立 Z 轴膨胀半径** — `grid_map/obstacles_inflation_z`，XY/Z 膨胀分开控制
-- ✅ **Mid-360 LiDAR 点云直连** — 无需深度相机，点云管线独立工作
+- ✅ **可选 LiDAR 点云直连** — 兼容 Livox Mid-360 等外部 LiDAR 点云输入，无需深度相机
 - ✅ **可视化截断高度可配** — `grid_map/visualization_truncate_height` 放入 launch 参数
 - ✅ **时间源同步修复** — 所有节点统一使用 `node->get_clock()`，修复 `[1 != 2]` 崩溃
 - ✅ **RViz 膨胀显示修复** — 修正 `pose_type=2` + 话题映射
@@ -228,9 +228,9 @@ ros2 action send_goal /drone_0_ego_planner_node/navigate_to_pose \
 
 **GPL v3** — 继承自 [ZJU-FAST-Lab/ego-planner-swarm](https://github.com/ZJU-FAST-Lab/ego-planner-swarm)
 
-本仓库是一个修改版本 (modified version)，修改内容包括但不限于：ROS 2 Action 接口、Z 轴规划使能、独立 Z 膨胀、Mid-360 适配、时间源修复。
+本仓库是一个修改版本 (modified version)，修改内容包括但不限于：ROS 2 Action 接口、Z 轴规划使能、独立 Z 膨胀、外部 LiDAR 兼容、时间源修复。
 
-This is a modified version of the original ego-planner-swarm. Modifications include: ROS 2 Action interface, Z-axis planning toggle, independent Z inflation, Mid-360 LiDAR support, clock sync fixes.
+This is a modified version of the original ego-planner-swarm. Modifications include: ROS 2 Action interface, Z-axis planning toggle, independent Z inflation, external LiDAR support, clock sync fixes.
 
 ---
 
