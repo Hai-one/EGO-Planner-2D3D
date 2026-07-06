@@ -13,9 +13,13 @@ endif()
 
 # find dependencies
 find_package(ament_cmake REQUIRED)
+find_package(rosidl_default_generators REQUIRED)
 find_package(rclcpp REQUIRED)
+find_package(rclcpp_action REQUIRED)
+find_package(action_msgs REQUIRED)
 find_package(geometry_msgs REQUIRED)
 find_package(quadrotor_msgs REQUIRED)
+find_package(tf2 REQUIRED)
 find_package(visualization_msgs REQUIRED)
 find_package(nav_msgs REQUIRED)
 find_package(plan_env REQUIRED)
@@ -47,8 +51,14 @@ include_directories(
   ${PCL_INCLUDE_DIRS}
 )
 
+# Generate Action interface
+rosidl_generate_interfaces(${PROJECT_NAME}
+  "action/NavigateToPose.action"
+  DEPENDENCIES geometry_msgs action_msgs
+)
+
 add_executable(ego_planner_node
-  src/ego_planner_node.cpp 
+  src/ego_planner_node.cpp
   src/ego_replan_fsm.cpp
   src/planner_manager.cpp
 )
@@ -57,12 +67,16 @@ add_executable(ego_planner_node
 #   traj_utils_lib
 # )
 
-ament_target_dependencies(ego_planner_node 
-                          rclcpp nav_msgs visualization_msgs 
-                          geometry_msgs quadrotor_msgs 
-                          plan_env path_searching 
-                          bspline_opt traj_utils 
+ament_target_dependencies(ego_planner_node
+                          rclcpp rclcpp_action action_msgs
+                          nav_msgs visualization_msgs
+                          geometry_msgs quadrotor_msgs
+                          plan_env path_searching
+                          bspline_opt traj_utils
                           cv_bridge pcl_conversions )
+
+rosidl_target_interfaces(ego_planner_node
+  ${PROJECT_NAME} "rosidl_typesupport_cpp")
 
 find_library(TRAJ_UTILS_LIB traj_utils_lib PATHS ${traj_utils_LIBRARY_DIRS})
 
@@ -72,12 +86,12 @@ target_link_libraries(ego_planner_node
 
 add_executable(traj_server src/traj_server.cpp)
 
-ament_target_dependencies(traj_server 
-                          rclcpp nav_msgs 
-                          visualization_msgs geometry_msgs 
-                          quadrotor_msgs plan_env 
-                          path_searching bspline_opt 
-                          traj_utils cv_bridge pcl_conversions)
+ament_target_dependencies(traj_server
+                          rclcpp nav_msgs
+                          visualization_msgs geometry_msgs
+                          quadrotor_msgs plan_env
+                          path_searching bspline_opt
+                          traj_utils cv_bridge pcl_conversions tf2)
 
 # Install targets
 install(

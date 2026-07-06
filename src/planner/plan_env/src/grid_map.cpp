@@ -17,6 +17,7 @@ void GridMap::initMap(rclcpp::Node::SharedPtr node)
   node_->declare_parameter("grid_map/local_update_range_y", -1.0);
   node_->declare_parameter("grid_map/local_update_range_z", -1.0);
   node_->declare_parameter("grid_map/obstacles_inflation", -1.0);
+  node_->declare_parameter("grid_map/obstacles_inflation_z", -1.0);
   node_->declare_parameter("grid_map/fx", -1.0);
   node_->declare_parameter("grid_map/fy", -1.0);
   node_->declare_parameter("grid_map/cx", -1.0);
@@ -45,6 +46,8 @@ void GridMap::initMap(rclcpp::Node::SharedPtr node)
   node_->declare_parameter("grid_map/local_map_margin", 1);
   node_->declare_parameter("grid_map/ground_height", 1.0);
   node_->declare_parameter("grid_map/odom_depth_timeout", 1.0);
+  node_->declare_parameter("grid_map/self_filter_radius", 0.3);        // 自身滤除半径 [m]
+  node_->declare_parameter("grid_map/local_inflation_range", 3.0);     // 局部膨胀范围 [m] (水平)
 
   node_->get_parameter("grid_map/resolution", mp_.resolution_);
   node_->get_parameter("grid_map/map_size_x", x_size);
@@ -54,6 +57,9 @@ void GridMap::initMap(rclcpp::Node::SharedPtr node)
   node_->get_parameter("grid_map/local_update_range_y", mp_.local_update_range_(1));
   node_->get_parameter("grid_map/local_update_range_z", mp_.local_update_range_(2));
   node_->get_parameter("grid_map/obstacles_inflation", mp_.obstacles_inflation_);
+  node_->get_parameter("grid_map/obstacles_inflation_z", mp_.obstacles_inflation_z_);
+  if (mp_.obstacles_inflation_z_ < 0.0)  // 未设置时默认等于 obstacles_inflation_
+    mp_.obstacles_inflation_z_ = mp_.obstacles_inflation_;
   node_->get_parameter("grid_map/fx", mp_.fx_);
   node_->get_parameter("grid_map/fy", mp_.fy_);
   node_->get_parameter("grid_map/cx", mp_.cx_);
@@ -82,6 +88,8 @@ void GridMap::initMap(rclcpp::Node::SharedPtr node)
   node_->get_parameter("grid_map/local_map_margin", mp_.local_map_margin_);
   node_->get_parameter("grid_map/ground_height", mp_.ground_height_);
   node_->get_parameter("grid_map/odom_depth_timeout", mp_.odom_depth_timeout_);
+  node_->get_parameter("grid_map/self_filter_radius", mp_.self_filter_radius_);
+  node_->get_parameter("grid_map/local_inflation_range", mp_.local_inflation_range_);
 
   if (mp_.virtual_ceil_height_ - mp_.ground_height_ > z_size)
   {
@@ -651,9 +659,8 @@ void GridMap::clearAndInflateLocalMap()
   // inflate occupied voxels to compensate robot size
 
   int inf_step = ceil(mp_.obstacles_inflation_ / mp_.resolution_);
-  // int inf_step_z = 1;
-  vector<Eigen::Vector3i> inf_pts(pow(2 * inf_step + 1, 3));
-  // inf_pts.resize(4 * inf_step + 3);
+  int inf_step_z = ceil(mp_.obstacles_inflation_z_ / mp_.resolution_);
+  vector<Eigen::Vector3i> inf_pts(pow(2 * inf_step + 1, 2) * (2 * inf_step_z + 1));
   Eigen::Vector3i inf_pt;
 
   // clear outdated data
@@ -672,7 +679,7 @@ void GridMap::clearAndInflateLocalMap()
 
         if (md_.occupancy_buffer_[toAddress(x, y, z)] > mp_.min_occupancy_log_)
         {
-          inflatePoint(Eigen::Vector3i(x, y, z), inf_step, inf_pts);
+          inflatePoint(Eigen::Vector3i(x, y, z), inf_step, inf_step_z, inf_pts);
 
           for (int k = 0; k < (int)inf_pts.size(); ++k)
           {
@@ -830,7 +837,7 @@ void GridMap::cloudCallback(const sensor_msgs::msg::PointCloud2::ConstPtr &img)
   Eigen::Vector3d p3d, p3d_inf;
 
   int inf_step = ceil(mp_.obstacles_inflation_ / mp_.resolution_);
-  int inf_step_z = 1;
+  int inf_step_z = ceil(mp_.obstacles_inflation_z_ / mp_.resolution_);
 
   double max_x, max_y, max_z, min_x, min_y, min_z;
 
@@ -854,6 +861,28 @@ void GridMap::cloudCallback(const sensor_msgs::msg::PointCloud2::ConstPtr &img)
     if (fabs(devi(0)) < mp_.local_update_range_(0) && fabs(devi(1)) < mp_.local_update_range_(1) &&
         fabs(devi(2)) < mp_.local_update_range_(2))
     {
+      // ── 自身滤除: 忽略无人机本体附近的点云 ──
+      double dist_horizontal = sqrt(devi(0) * devi(0) + devi(1) * devi(1));
+      if (dist_horizontal < mp_.self_filter_radius_)
+        continue;
+
+      // ── 局部膨胀范围: 超出水平范围的障碍物不膨胀 ──
+      if (dist_horizontal > mp_.local_inflation_range_)
+      {
+        // 仅标记该点本身, 不做膨胀
+        posToIndex(p3d, inf_pt);
+        if (isInMap(inf_pt))
+        {
+          md_.occupancy_buffer_inflate_[toAddress(inf_pt)] = 1;
+          max_x = max(max_x, p3d(0));
+          max_y = max(max_y, p3d(1));
+          max_z = max(max_z, p3d(2));
+          min_x = min(min_x, p3d(0));
+          min_y = min(min_y, p3d(1));
+          min_z = min(min_z, p3d(2));
+        }
+        continue;
+      }
 
       /* inflate the point */
       // 点云膨胀

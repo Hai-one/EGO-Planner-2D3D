@@ -3,12 +3,32 @@
 #include "traj_utils/msg/bspline.hpp"
 #include "quadrotor_msgs/msg/position_command.hpp"
 #include "std_msgs/msg/empty.hpp"
+#include "std_msgs/msg/float32.hpp"
 #include "visualization_msgs/msg/marker.hpp"
+#include "geometry_msgs/msg/pose_stamped.hpp"
+#include "geometry_msgs/msg/twist_stamped.hpp"
+#include "tf2/LinearMath/Quaternion.h"
 #include <rclcpp/rclcpp.hpp>
 
+// ── 标准化输出接口 ──────────────────────────────────────────
+// 除了自定义 PositionCommand，同时发布标准 ROS2 消息，
+// 方便任意飞控桥接节点直接订阅，无需依赖自定义消息类型。
+//
+// 话题:
+//   ~/position_setpoint  (geometry_msgs::msg::PoseStamped)  – 期望位置 + 偏航姿态
+//   ~/velocity_setpoint  (geometry_msgs::msg::TwistStamped) – 期望速度
+//   ~/yaw_setpoint       (std_msgs::msg::Float32)           – 期望偏航角 [rad]
+//   /position_cmd        (quadrotor_msgs::msg::PositionCommand) – 完整指令(保持兼容)
+
 rclcpp::Publisher<quadrotor_msgs::msg::PositionCommand>::SharedPtr pos_cmd_pub;
+rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr pos_setpoint_pub_;
+rclcpp::Publisher<geometry_msgs::msg::TwistStamped>::SharedPtr vel_setpoint_pub_;
+rclcpp::Publisher<std_msgs::msg::Float32>::SharedPtr yaw_setpoint_pub_;
 
 quadrotor_msgs::msg::PositionCommand cmd;
+geometry_msgs::msg::PoseStamped pos_setpoint_;
+geometry_msgs::msg::TwistStamped vel_setpoint_;
+std_msgs::msg::Float32 yaw_setpoint_;
 double pos_gain[3] = {0, 0, 0};
 double vel_gain[3] = {0, 0, 0};
 
@@ -20,9 +40,22 @@ double traj_duration_;
 rclcpp::Time start_time_;
 int traj_id_;
 
+// odometry tracking — 确保控制始终锚定在无人机真实位置
+Eigen::Vector3d odom_pos_ = Eigen::Vector3d::Zero();
+bool have_odom_ = false;
+double max_deviation_ = 0.5;  // 允许的最大偏离 [m]
+
 // yaw control
 double last_yaw_, last_yaw_dot_;
 double time_forward_;
+
+void odomCallback(const nav_msgs::msg::Odometry::SharedPtr msg)
+{
+  odom_pos_(0) = msg->pose.pose.position.x;
+  odom_pos_(1) = msg->pose.pose.position.y;
+  odom_pos_(2) = msg->pose.pose.position.z;
+  have_odom_ = true;
+}
 
 void bsplineCallback(traj_utils::msg::Bspline::ConstPtr msg)
 {
@@ -46,15 +79,6 @@ void bsplineCallback(traj_utils::msg::Bspline::ConstPtr msg)
   UniformBspline pos_traj(pos_pts, msg->order, 0.1);
   pos_traj.setKnot(knots);
 
-  // parse yaw traj
-
-  // Eigen::MatrixXd yaw_pts(msg->yaw_pts.size(), 1);
-  // for (int i = 0; i < msg->yaw_pts.size(); ++i) {
-  //   yaw_pts(i, 0) = msg->yaw_pts[i];
-  // }
-
-  // UniformBspline yaw_traj(yaw_pts, msg->order, msg->yaw_dt);
-
   start_time_ = msg->start_time;
   traj_id_ = msg->traj_id;
 
@@ -72,7 +96,6 @@ std::pair<double, double> calculate_yaw(double t_cur, Eigen::Vector3d &pos, rclc
 {
   constexpr double PI = 3.1415926;
   constexpr double YAW_DOT_MAX_PER_SEC = PI;
-  // constexpr double YAW_DOT_DOT_MAX_PER_SEC = PI;
   std::pair<double, double> yaw_yawdot(0, 0);
   double yaw = 0;
   double yawdot = 0;
@@ -167,7 +190,7 @@ void cmdCallback()
     return;
 
   // 统一时间源
-  rclcpp::Clock clock(RCL_ROS_TIME);  
+  rclcpp::Clock clock(RCL_ROS_TIME);
   rclcpp::Time time_now = clock.now();
   double t_cur = (time_now - start_time_).seconds();
 
@@ -206,8 +229,23 @@ void cmdCallback()
   }
   time_last = time_now;
 
+  // ── 偏离检测: 无人机超出轨迹起点太远 → 原地悬停 ──
+  if (have_odom_ && receive_traj_)
+  {
+    double dev = (odom_pos_ - pos).norm();
+    if (dev > max_deviation_)
+    {
+      pos = odom_pos_;
+      vel.setZero();
+      acc.setZero();
+      yaw_yawdot.first = last_yaw_;
+      yaw_yawdot.second = 0.0;
+    }
+  }
+
+  // ── 填充自定义消息 (保持兼容) ──
   cmd.header.stamp = time_now;
-  cmd.header.frame_id = "world";
+  cmd.header.frame_id = "odom";
   cmd.trajectory_flag = quadrotor_msgs::msg::PositionCommand::TRAJECTORY_STATUS_READY;
   cmd.trajectory_id = traj_id_;
 
@@ -229,6 +267,35 @@ void cmdCallback()
   last_yaw_ = cmd.yaw;
 
   pos_cmd_pub->publish(cmd);
+
+  // ── 发布标准化消息 (供任意飞控桥接使用) ──
+
+  // 1. 位置设定点: PoseStamped (位置 + 偏航四元数)
+  pos_setpoint_.header.stamp = time_now;
+  pos_setpoint_.header.frame_id = "odom";
+  pos_setpoint_.pose.position.x = pos(0);
+  pos_setpoint_.pose.position.y = pos(1);
+  pos_setpoint_.pose.position.z = pos(2);
+  tf2::Quaternion q;
+  q.setRPY(0.0, 0.0, yaw_yawdot.first);
+  pos_setpoint_.pose.orientation.w = q.w();
+  pos_setpoint_.pose.orientation.x = q.x();
+  pos_setpoint_.pose.orientation.y = q.y();
+  pos_setpoint_.pose.orientation.z = q.z();
+  pos_setpoint_pub_->publish(pos_setpoint_);
+
+  // 2. 速度设定点: TwistStamped (线速度 + 偏航角速率)
+  vel_setpoint_.header.stamp = time_now;
+  vel_setpoint_.header.frame_id = "odom";
+  vel_setpoint_.twist.linear.x = vel(0);
+  vel_setpoint_.twist.linear.y = vel(1);
+  vel_setpoint_.twist.linear.z = vel(2);
+  vel_setpoint_.twist.angular.z = yaw_yawdot.second;
+  vel_setpoint_pub_->publish(vel_setpoint_);
+
+  // 3. 偏航设定点: Float32 [rad]
+  yaw_setpoint_.data = yaw_yawdot.first;
+  yaw_setpoint_pub_->publish(yaw_setpoint_);
 }
 
 int main(int argc, char **argv)
@@ -241,9 +308,26 @@ int main(int argc, char **argv)
       10,
       bsplineCallback);
 
+  auto odom_sub = node->create_subscription<nav_msgs::msg::Odometry>(
+      "odom_world",
+      10,
+      odomCallback);
+
+  node->declare_parameter("traj_server/max_deviation", 0.5);
+  node->get_parameter("traj_server/max_deviation", max_deviation_);
+
+  // ── 自定义消息输出 (保持兼容) ──
   pos_cmd_pub = node->create_publisher<quadrotor_msgs::msg::PositionCommand>(
       "/position_cmd",
       50);
+
+  // ── 标准化消息输出 (供飞控桥接使用) ──
+  pos_setpoint_pub_ = node->create_publisher<geometry_msgs::msg::PoseStamped>(
+      "~/position_setpoint", 10);
+  vel_setpoint_pub_ = node->create_publisher<geometry_msgs::msg::TwistStamped>(
+      "~/velocity_setpoint", 10);
+  yaw_setpoint_pub_ = node->create_publisher<std_msgs::msg::Float32>(
+      "~/yaw_setpoint", 10);
 
   auto cmd_timer = node->create_wall_timer(
       std::chrono::milliseconds(10),
@@ -267,6 +351,11 @@ int main(int argc, char **argv)
   rclcpp::sleep_for(std::chrono::seconds(1));
 
   RCLCPP_WARN(node->get_logger(), "[Traj server]: ready.");
+  RCLCPP_INFO(node->get_logger(), "  Output interfaces:");
+  RCLCPP_INFO(node->get_logger(), "    ~/position_setpoint  (geometry_msgs/PoseStamped)");
+  RCLCPP_INFO(node->get_logger(), "    ~/velocity_setpoint  (geometry_msgs/TwistStamped)");
+  RCLCPP_INFO(node->get_logger(), "    ~/yaw_setpoint       (std_msgs/Float32)");
+  RCLCPP_INFO(node->get_logger(), "    /position_cmd        (quadrotor_msgs/PositionCommand)");
 
   rclcpp::spin(node);
   rclcpp::shutdown();

@@ -1,0 +1,191 @@
+<?xml version="1.0" encoding="utf-8"?>
+<robot name="odin1_quadcopter">
+  <!-- =========================================================
+       X型四旋翼 URDF 模型
+       root link: odin1_base_link (避免与 Odin TF 冲突)
+       odin1_base_link → odin1_base_link (静态TF)
+       轴距: ~0.31m, 桨径: 0.24m
+       ========================================================= -->
+
+  <!-- ── 材质 ── -->
+  <material name="body_gray"><color rgba="0.25 0.25 0.3 0.95"/></material>
+  <material name="arm_gray"><color rgba="0.18 0.18 0.22 0.9"/></material>
+  <material name="motor_dark"><color rgba="0.08 0.08 0.12 0.9"/></material>
+  <material name="prop_white"><color rgba="0.55 0.55 0.6 0.3"/></material>
+  <material name="led_green"><color rgba="0.0 1.0 0.0 0.95"/></material>
+  <material name="led_red"><color rgba="1.0 0.0 0.0 0.95"/></material>
+
+  <!-- =========================================================
+       ROOT LINK (静态TF: odin1_base_link → odin1_base_link)
+       ========================================================= -->
+  <link name="odin1_base_link"/>
+
+  <!-- 机身 -->
+  <joint name="base_to_body" type="fixed">
+    <parent link="odin1_base_link"/><child link="body"/>
+    <origin xyz="0 0 0" rpy="0 0 0"/>
+  </joint>
+  <link name="body">
+    <visual>
+      <geometry><box size="0.16 0.11 0.06"/></geometry>
+      <origin xyz="0 0 0.03"/>
+      <material name="body_gray"/>
+    </visual>
+  </link>
+
+  <!-- 前方指示灯 (绿) -->
+  <joint name="body_to_led_front" type="fixed">
+    <parent link="body"/><child link="led_front"/>
+    <origin xyz="0.09 0 0.02" rpy="0 0 0"/>
+  </joint>
+  <link name="led_front">
+    <visual><geometry><sphere radius="0.012"/></geometry><material name="led_green"/></visual>
+  </link>
+
+  <!-- 后方指示灯 (红) -->
+  <joint name="body_to_led_rear" type="fixed">
+    <parent link="body"/><child link="led_rear"/>
+    <origin xyz="-0.09 0 0.02" rpy="0 0 0"/>
+  </joint>
+  <link name="led_rear">
+    <visual><geometry><sphere radius="0.012"/></geometry><material name="led_red"/></visual>
+  </link>
+
+  <!-- =========================================================
+       4 条机臂 + 电机 + 桨盘 (X 布局)
+       臂端点坐标: (±0.1556, ±0.1556) → 轴距 0.31m
+       ========================================================= -->
+
+  <!-- ── 1: 前右 (+x,+y) ── -->
+  <joint name="body_to_arm1" type="fixed">
+    <parent link="body"/><child link="arm_1"/>
+    <origin xyz="0.1556 0.1556 0.03" rpy="0 0 0"/>
+  </joint>
+  <link name="arm_1">
+    <visual>
+      <geometry><cylinder radius="0.008" length="0.22"/></geometry>
+      <origin xyz="0 0 0" rpy="0 1.5708 0"/>
+      <material name="arm_gray"/>
+    </visual>
+  </link>
+  <joint name="arm1_to_motor1" type="fixed">
+    <parent link="arm_1"/><child link="motor_1"/>
+    <origin xyz="0 0 0" rpy="0 0 0"/>
+  </joint>
+  <link name="motor_1">
+    <visual>
+      <geometry><cylinder radius="0.032" length="0.022"/></geometry>
+      <material name="motor_dark"/>
+    </visual>
+  </link>
+  <joint name="motor1_to_prop1" type="fixed">
+    <parent link="motor_1"/><child link="prop_1"/>
+    <origin xyz="0 0 0.016" rpy="0 0 0"/>
+  </joint>
+  <link name="prop_1">
+    <visual>
+      <geometry><cylinder radius="0.12" length="0.004"/></geometry>
+      <material name="prop_white"/>
+    </visual>
+  </link>
+
+  <!-- ── 2: 后右 (+x,-y) ── -->
+  <joint name="body_to_arm2" type="fixed">
+    <parent link="body"/><child link="arm_2"/>
+    <origin xyz="0.1556 -0.1556 0.03" rpy="0 0 0"/>
+  </joint>
+  <link name="arm_2">
+    <visual>
+      <geometry><cylinder radius="0.008" length="0.22"/></geometry>
+      <origin xyz="0 0 0" rpy="0 1.5708 0"/>
+      <material name="arm_gray"/>
+    </visual>
+  </link>
+  <joint name="arm2_to_motor2" type="fixed">
+    <parent link="arm_2"/><child link="motor_2"/>
+    <origin xyz="0 0 0" rpy="0 0 0"/>
+  </joint>
+  <link name="motor_2">
+    <visual>
+      <geometry><cylinder radius="0.032" length="0.022"/></geometry>
+      <material name="motor_dark"/>
+    </visual>
+  </link>
+  <joint name="motor2_to_prop2" type="fixed">
+    <parent link="motor_2"/><child link="prop_2"/>
+    <origin xyz="0 0 0.016" rpy="0 0 0"/>
+  </joint>
+  <link name="prop_2">
+    <visual>
+      <geometry><cylinder radius="0.12" length="0.004"/></geometry>
+      <material name="prop_white"/>
+    </visual>
+  </link>
+
+  <!-- ── 3: 后左 (-x,-y) ── -->
+  <joint name="body_to_arm3" type="fixed">
+    <parent link="body"/><child link="arm_3"/>
+    <origin xyz="-0.1556 -0.1556 0.03" rpy="0 0 0"/>
+  </joint>
+  <link name="arm_3">
+    <visual>
+      <geometry><cylinder radius="0.008" length="0.22"/></geometry>
+      <origin xyz="0 0 0" rpy="0 1.5708 0"/>
+      <material name="arm_gray"/>
+    </visual>
+  </link>
+  <joint name="arm3_to_motor3" type="fixed">
+    <parent link="arm_3"/><child link="motor_3"/>
+    <origin xyz="0 0 0" rpy="0 0 0"/>
+  </joint>
+  <link name="motor_3">
+    <visual>
+      <geometry><cylinder radius="0.032" length="0.022"/></geometry>
+      <material name="motor_dark"/>
+    </visual>
+  </link>
+  <joint name="motor3_to_prop3" type="fixed">
+    <parent link="motor_3"/><child link="prop_3"/>
+    <origin xyz="0 0 0.016" rpy="0 0 0"/>
+  </joint>
+  <link name="prop_3">
+    <visual>
+      <geometry><cylinder radius="0.12" length="0.004"/></geometry>
+      <material name="prop_white"/>
+    </visual>
+  </link>
+
+  <!-- ── 4: 前左 (-x,+y) ── -->
+  <joint name="body_to_arm4" type="fixed">
+    <parent link="body"/><child link="arm_4"/>
+    <origin xyz="-0.1556 0.1556 0.03" rpy="0 0 0"/>
+  </joint>
+  <link name="arm_4">
+    <visual>
+      <geometry><cylinder radius="0.008" length="0.22"/></geometry>
+      <origin xyz="0 0 0" rpy="0 1.5708 0"/>
+      <material name="arm_gray"/>
+    </visual>
+  </link>
+  <joint name="arm4_to_motor4" type="fixed">
+    <parent link="arm_4"/><child link="motor_4"/>
+    <origin xyz="0 0 0" rpy="0 0 0"/>
+  </joint>
+  <link name="motor_4">
+    <visual>
+      <geometry><cylinder radius="0.032" length="0.022"/></geometry>
+      <material name="motor_dark"/>
+    </visual>
+  </link>
+  <joint name="motor4_to_prop4" type="fixed">
+    <parent link="motor_4"/><child link="prop_4"/>
+    <origin xyz="0 0 0.016" rpy="0 0 0"/>
+  </joint>
+  <link name="prop_4">
+    <visual>
+      <geometry><cylinder radius="0.12" length="0.004"/></geometry>
+      <material name="prop_white"/>
+    </visual>
+  </link>
+
+</robot>

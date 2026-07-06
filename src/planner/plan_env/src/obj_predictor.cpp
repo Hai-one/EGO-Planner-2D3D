@@ -50,7 +50,7 @@ namespace fast_planner
 
     Eigen::Vector4d pos_t;
     pos_t(0) = msg->pose.position.x, pos_t(1) = msg->pose.position.y, pos_t(2) = msg->pose.position.z;
-    pos_t(3) = (rclcpp::Clock().now() - global_start_time_).seconds();
+    pos_t(3) = (rclcpp::Clock(RCL_SYSTEM_TIME).now() - global_start_time_).seconds();
 
     history_.push_back(pos_t);
     // cout << "idx: " << obj_idx_ << "pos_t: " << pos_t.transpose() << endl;

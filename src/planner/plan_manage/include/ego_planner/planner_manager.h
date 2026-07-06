@@ -51,8 +51,9 @@ namespace ego_planner
     LocalTrajData local_data_;
     GlobalTrajData global_data_;
     GridMap::Ptr grid_map_;
-    fast_planner::ObjPredictor::Ptr obj_predictor_;    
+    fast_planner::ObjPredictor::Ptr obj_predictor_;
     SwarmTrajData swarm_trajs_buf_;
+    rclcpp::Clock::SharedPtr clock_;  // 节点时钟 (与 node_->now() 同源)
 
   private:
     /* main planning algorithms & modules */

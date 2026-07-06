@@ -56,6 +56,9 @@ struct MappingParameters
   Eigen::Vector3d local_update_range_;
   double resolution_, resolution_inv_;
   double obstacles_inflation_;
+  double obstacles_inflation_z_; // Z 轴方向独立膨胀半径 [m], 默认 = obstacles_inflation_
+  double self_filter_radius_;     // 自身滤除范围 [m], 此半径内的点云被忽略 (避免无人机本体被当作障碍物)
+  double local_inflation_range_;  // 局部膨胀范围 [m] (水平), 超出此范围的障碍物不膨胀
   string frame_id_;
   int pose_type_;
 
@@ -220,7 +223,7 @@ private:
   void raycastProcess();
   void clearAndInflateLocalMap();
 
-  inline void inflatePoint(const Eigen::Vector3i &pt, int step, vector<Eigen::Vector3i> &pts);
+  inline void inflatePoint(const Eigen::Vector3i &pt, int step, int step_z, vector<Eigen::Vector3i> &pts);
   int setCacheOccupancy(Eigen::Vector3d pos, int occ);
   Eigen::Vector3d closetPointInMap(const Eigen::Vector3d &pt, const Eigen::Vector3d &camera_pt);
 
@@ -416,31 +419,14 @@ inline void GridMap::indexToPos(const Eigen::Vector3i &id, Eigen::Vector3d &pos)
     pos(i) = (id(i) + 0.5) * mp_.resolution_ + mp_.map_origin_(i);
 }
 
-inline void GridMap::inflatePoint(const Eigen::Vector3i &pt, int step, vector<Eigen::Vector3i> &pts)
+inline void GridMap::inflatePoint(const Eigen::Vector3i &pt, int step, int step_z, vector<Eigen::Vector3i> &pts)
 {
   int num = 0;
-  /* ---------- + shape inflate ---------- */
-  // for (int x = -step; x <= step; ++x)
-  // {
-  //   if (x == 0)
-  //     continue;
-  //   pts[num++] = Eigen::Vector3i(pt(0) + x, pt(1), pt(2));
-  // }
-  // for (int y = -step; y <= step; ++y)
-  // {
-  //   if (y == 0)
-  //     continue;
-  //   pts[num++] = Eigen::Vector3i(pt(0), pt(1) + y, pt(2));
-  // }
-  // for (int z = -1; z <= 1; ++z)
-  // {
-  //   pts[num++] = Eigen::Vector3i(pt(0), pt(1), pt(2) + z);
-  // }
 
   /* ---------- all inflate ---------- */
   for (int x = -step; x <= step; ++x)
     for (int y = -step; y <= step; ++y)
-      for (int z = -step; z <= step; ++z)
+      for (int z = -step_z; z <= step_z; ++z)
       {
         pts[num++] = Eigen::Vector3i(pt(0) + x, pt(1) + y, pt(2) + z);
       }

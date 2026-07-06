@@ -630,7 +630,7 @@ void odom_sub_udp_cb(const std::shared_ptr<const nav_msgs::msg::Odometry> &msg)
 {
 
   static rclcpp::Time t_last;
-  rclcpp::Time t_now = rclcpp::Clock().now();
+  rclcpp::Time t_now = rclcpp::Clock(RCL_SYSTEM_TIME).now();
   if ((t_now - t_last).seconds() * odom_broadcast_freq_ < 1.0)
   {
     return;

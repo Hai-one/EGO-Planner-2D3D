@@ -30,6 +30,8 @@ namespace ego_planner
     node->get_parameter("manager/use_distinctive_trajs", pp_.use_distinctive_trajs);
     node->get_parameter("manager/drone_id", pp_.drone_id);
 
+    clock_ = node->get_clock();  // 与 FSM 的 node_->now() 时钟同源
+
     local_data_.traj_id_ = 0;
     grid_map_.reset(new GridMap);
     // grid_map_->initMap(nh);
@@ -61,7 +63,7 @@ namespace ego_planner
 
     bspline_optimizer_->setLocalTargetPt(local_target_pt);
 
-    rclcpp::Time t_start = rclcpp::Clock().now();
+    rclcpp::Time t_start = clock_->now();
     rclcpp::Duration t_init(0, 0), t_opt(0, 0), t_refine(0, 0);
 
     /*** STEP 1: INIT
@@ -141,7 +143,7 @@ namespace ego_planner
       {
 
         double t;
-        double t_cur = (rclcpp::Clock().now() - local_data_.start_time_).seconds();
+        double t_cur = (clock_->now() - local_data_.start_time_).seconds();
 
         vector<double> pseudo_arc_length;
         vector<Eigen::Vector3d> segment_point;
@@ -223,7 +225,7 @@ namespace ego_planner
     vector<std::pair<int, int>> segments;
     segments = bspline_optimizer_->initControlPoints(ctrl_pts, true);
     // 计算时间差并更新时间
-    auto now = rclcpp::Clock().now();
+    auto now = clock_->now();
     t_init = now - t_start;
     t_start = now;
 
@@ -267,14 +269,14 @@ namespace ego_planner
         }
       }
 
-      t_opt = rclcpp::Clock().now() - t_start;
+      t_opt = clock_->now() - t_start;
 
       visualization_->displayMultiInitPathList(vis_trajs, 0.2);
     }
     else
     {
       flag_step_1_success = bspline_optimizer_->BsplineOptimizeTrajRebound(ctrl_pts, ts);
-      t_opt = rclcpp::Clock().now() - t_start;
+      t_opt = clock_->now() - t_start;
       // static int vis_id = 0;
       visualization_->displayInitPathList(point_set, 0.2, 0);
     }
@@ -287,7 +289,7 @@ namespace ego_planner
       return false;
     }
 
-    t_start = rclcpp::Clock().now();
+    t_start = clock_->now();
 
     UniformBspline pos = UniformBspline(ctrl_pts, 3, ts);
     pos.setPhysicalLimits(pp_.max_vel_, pp_.max_acc_, pp_.feasibility_tolerance_);
@@ -327,10 +329,10 @@ namespace ego_planner
     }
 
     // t_refine = ros::Time::now() - t_start;
-    t_refine = rclcpp::Clock().now() - t_start;
+    t_refine = clock_->now() - t_start;
 
     // save planned results
-    updateTrajInfo(pos, rclcpp::Clock().now());
+    updateTrajInfo(pos, clock_->now());
 
     static double sum_time = 0;
     static int count_success = 0;
@@ -355,7 +357,7 @@ namespace ego_planner
       control_points.col(i) = stop_pos;
     }
 
-    updateTrajInfo(UniformBspline(control_points, 3, 1.0), rclcpp::Clock().now());
+    updateTrajInfo(UniformBspline(control_points, 3, 1.0), clock_->now());
 
     return true;
   }
@@ -453,7 +455,7 @@ namespace ego_planner
     else
       return false;
 
-    auto time_now = rclcpp::Clock().now();
+    auto time_now = clock_->now();
 
     global_data_.setGlobalTraj(gl_traj, time_now);
 
@@ -465,36 +467,41 @@ namespace ego_planner
   {
 
     // generate global reference trajectory
+    // 优先用 A* 搜索避障路径, 失败则退回到直线
 
-    vector<Eigen::Vector3d> points;
-    points.push_back(start_pos);
-    points.push_back(end_pos);
-
-    // insert intermediate points if too far
     vector<Eigen::Vector3d> inter_points;
-    const double dist_thresh = 4.0;
 
-    for (size_t i = 0; i < points.size() - 1; ++i)
-    /*挨个读取点并计算点距判断是否需要插点，随后计算插点并写入矩阵，最后根据插点数量生成全局轨迹
-      最终返回值为是否规划成功的布尔值 */
+    // ── 尝试 A* 全局路径 ──
+    bool astar_ok = false;
+    if (grid_map_)
     {
-      inter_points.push_back(points.at(i));
-      double dist = (points.at(i + 1) - points.at(i)).norm();
-
-      if (dist > dist_thresh)
+      double step = max(pp_.ctrl_pt_dist, 0.2);
+      astar_ok = bspline_optimizer_->a_star_->AstarSearch(step, start_pos, end_pos);
+      if (astar_ok)
       {
-        int id_num = floor(dist / dist_thresh) + 1;
-
-        for (int j = 1; j < id_num; ++j)
-        {
-          Eigen::Vector3d inter_pt =
-              points.at(i) * (1.0 - double(j) / id_num) + points.at(i + 1) * double(j) / id_num;
-          inter_points.push_back(inter_pt);
-        }
+        inter_points = bspline_optimizer_->a_star_->getPath();
+        if (inter_points.size() < 2)
+          astar_ok = false;
       }
     }
 
-    inter_points.push_back(points.back());
+    if (!astar_ok)
+    {
+      // 退回直线插值
+      inter_points.clear();
+      inter_points.push_back(start_pos);
+      double dist = (end_pos - start_pos).norm();
+      if (dist > 4.0)
+      {
+        int id_num = floor(dist / 4.0) + 1;
+        for (int j = 1; j < id_num; ++j)
+        {
+          Eigen::Vector3d inter_pt = start_pos * (1.0 - double(j) / id_num) + end_pos * double(j) / id_num;
+          inter_points.push_back(inter_pt);
+        }
+      }
+      inter_points.push_back(end_pos);
+    }
 
     // write position matrix
     int pt_num = inter_points.size();
@@ -520,7 +527,7 @@ namespace ego_planner
     else
       return false;
 
-    auto time_now = rclcpp::Clock().now();
+    auto time_now = clock_->now();
 
     global_data_.setGlobalTraj(gl_traj, time_now);
 

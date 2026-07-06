@@ -152,8 +152,8 @@ int main(int argc, char **argv)
     obj_models.push_back(model);
   }
 
-  time_update = rclcpp::Clock().now();
-  time_change = rclcpp::Clock().now();
+  time_update = rclcpp::Clock(RCL_SYSTEM_TIME).now();
+  time_change = rclcpp::Clock(RCL_SYSTEM_TIME).now();
 
   /* ---------- start loop ---------- */
   rclcpp::spin(node);
@@ -163,7 +163,7 @@ int main(int argc, char **argv)
 
 void updateCallback()
 {
-  rclcpp::Time time_now = rclcpp::Clock().now();
+  rclcpp::Time time_now = rclcpp::Clock(RCL_SYSTEM_TIME).now();
 
   /* ---------- change input ---------- */
   // double dtc = (time_now - time_change).toSec();
@@ -230,7 +230,7 @@ void visualizeObj(int id)
   /* ---------- rviz ---------- */
   visualization_msgs::msg::Marker mk;
   mk.header.frame_id = "world";
-  mk.header.stamp = rclcpp::Clock().now();
+  mk.header.stamp = rclcpp::Clock(RCL_SYSTEM_TIME).now();
   mk.type = visualization_msgs::msg::Marker::CUBE;
   mk.action = visualization_msgs::msg::Marker::ADD;
   mk.id = id;

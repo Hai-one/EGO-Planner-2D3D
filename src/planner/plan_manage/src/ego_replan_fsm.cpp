@@ -32,6 +32,9 @@ namespace ego_planner
     node_->get_parameter("fsm/realworld_experiment", flag_realworld_experiment_);
     node_->get_parameter("fsm/fail_safe", enable_fail_safe_);
 
+    node_->declare_parameter("fsm/enable_z_planning", true);
+    node_->get_parameter("fsm/enable_z_planning", enable_z_planning_);
+
     have_trigger_ = !flag_realworld_experiment_;
 
     node_->declare_parameter("fsm/waypoint_num", -1);
@@ -111,6 +114,23 @@ namespace ego_planner
 
     bspline_pub_ = node_->create_publisher<traj_utils::msg::Bspline>("planning/bspline", 10);
     data_disp_pub_ = node_->create_publisher<traj_utils::msg::DataDisp>("planning/data_display", 100);
+    goal_reached_pub_ = node_->create_publisher<std_msgs::msg::Bool>("~/goal_reached", 10);
+    current_pose_pub_ = node_->create_publisher<geometry_msgs::msg::PoseStamped>("~/current_pose", 10);
+    replan_start_pub_ = node_->create_publisher<geometry_msgs::msg::PoseStamped>("~/replan_start", 10);
+
+    // ── Action Server ──────────────────────────────────────
+    // 提供标准的 ROS 2 Action 导航接口, 支持反馈/取消/结果报告。
+    // 话题: ~/navigate_to_pose (ego_planner/action/NavigateToPose)
+    action_server_ = rclcpp_action::create_server<NavigateToPose>(
+        node_,
+        "~/navigate_to_pose",
+        std::bind(&EGOReplanFSM::actionHandleGoal, this, std::placeholders::_1, std::placeholders::_2),
+        std::bind(&EGOReplanFSM::actionHandleCancel, this, std::placeholders::_1),
+        std::bind(&EGOReplanFSM::actionHandleAccepted, this, std::placeholders::_1));
+    RCLCPP_INFO(node_->get_logger(), "[EGO Planner] Action server ready: ~/navigate_to_pose");
+
+    // 初始化反馈节流时钟 (须用 node_->now() 保证时钟类型一致)
+    last_feedback_time_ = node_->now();
 
     if (target_type_ == TARGET_TYPE::MANUAL_TARGET)
     {
@@ -185,12 +205,17 @@ namespace ego_planner
 
   void EGOReplanFSM::planNextWaypoint(const Eigen::Vector3d next_wp)
   {
+    // Z 轴锁定: 关闭 Z 规划时, 目标高度 = 当前高度
+    Eigen::Vector3d end_wp = next_wp;
+    if (!enable_z_planning_)
+      end_wp.z() = odom_pos_.z();
+
     bool success = false;
-    success = planner_manager_->planGlobalTraj(odom_pos_, odom_vel_, Eigen::Vector3d::Zero(), next_wp, Eigen::Vector3d::Zero(), Eigen::Vector3d::Zero());
+    success = planner_manager_->planGlobalTraj(odom_pos_, odom_vel_, Eigen::Vector3d::Zero(), end_wp, Eigen::Vector3d::Zero(), Eigen::Vector3d::Zero());
 
     if (success)
     {
-      end_pt_ = next_wp;
+      end_pt_ = end_wp;
 
       constexpr double step_size_t = 0.1;
       int i_end = floor(planner_manager_->global_data_.global_duration_ / step_size_t);
@@ -234,15 +259,26 @@ namespace ego_planner
 
   void EGOReplanFSM::waypointCallback(const std::shared_ptr<const geometry_msgs::msg::PoseStamped> &msg)
   {
+    // ── RViz 2D Nav Goal 回调 ──────────────────────────────
+    // 话题: /move_base_simple/goal  (仅 MANUAL_TARGET 模式下启用)
     if (msg->pose.position.z < -0.1)
       return;
 
+    // 若 Action 活跃, 先 abort
+    {
+      bool need_abort = false;
+      {
+        std::lock_guard<std::mutex> lock(action_mutex_);
+        need_abort = (action_active_ && active_goal_handle_ && active_goal_handle_->is_active());
+      }
+      if (need_abort)
+        setActionResult(false, NavigateToPose::Result::ERROR_CANCELLED,
+                        "Goal overridden by RViz 2D Nav Goal.");
+    }
+
     cout << "Triggered!" << endl;
-
     init_pt_ = odom_pos_;
-
     Eigen::Vector3d end_wp(msg->pose.position.x, msg->pose.position.y, 1.0);
-
     planNextWaypoint(end_wp);
   }
 
@@ -264,6 +300,13 @@ namespace ego_planner
     odom_orient_.z() = msg->pose.pose.orientation.z;
 
     have_odom_ = true;
+
+    // 发布当前位姿 (调试/监控用)
+    geometry_msgs::msg::PoseStamped pose_msg;
+    pose_msg.header.stamp = node_->now();
+    pose_msg.header.frame_id = "odom";
+    pose_msg.pose = msg->pose.pose;
+    current_pose_pub_->publish(pose_msg);
   }
 
   void EGOReplanFSM::BroadcastBsplineCallback(const std::shared_ptr<const traj_utils::msg::Bspline> &msg)
@@ -273,16 +316,12 @@ namespace ego_planner
       return;
 
     // if (abs((ros::Time::now() - msg->start_time).toSec()) > 0.25)
-    rclcpp::Clock clock(RCL_SYSTEM_TIME);  // 确保使用当前节点的时间源
-    auto msg_time = rclcpp::Time(msg->start_time, clock.get_clock_type());
-    // RCLCPP_INFO(node_->get_logger(), "Clock type: %d", rclcpp::Clock().now().get_clock_type());
-    // RCLCPP_INFO(node_->get_logger(), "Start time clock type: %d", rclcpp::Time(msg->start_time).get_clock_type());
-    // RCLCPP_INFO(node_->get_logger(), "msg_time: %d", msg_time.get_clock_type());
-    if (abs((rclcpp::Clock().now() - msg_time).seconds()) > 0.25)
+    rclcpp::Clock steady_clock(RCL_STEADY_TIME);
+    auto msg_time = rclcpp::Time(msg->start_time, steady_clock.get_clock_type());
+    if (abs((steady_clock.now() - msg_time).seconds()) > 0.25)
     {
-      // ROS_ERROR("Time difference is too large! Local - Remote Agent %d = %fs", msg->drone_id, (ros::Time::now() - msg->start_time).toSec());
       RCLCPP_ERROR(node_->get_logger(), "Time difference is too large! Local - Remote Agent %d = %fs",
-                   msg->drone_id, (rclcpp::Clock().now() - msg_time).seconds());
+                   msg->drone_id, (steady_clock.now() - msg_time).seconds());
       return;
     }
 
@@ -446,6 +485,15 @@ namespace ego_planner
     static string state_str[8] = {"INIT", "WAIT_TARGET", "GEN_NEW_TRAJ", "REPLAN_TRAJ", "EXEC_TRAJ", "EMERGENCY_STOP", "SEQUENTIAL_START"};
     int pre_s = int(exec_state_);
     exec_state_ = new_state;
+
+    // 进入 GEN_NEW_TRAJ 或 REPLAN_TRAJ → 标记正在执行 (还未到达)
+    if (new_state == GEN_NEW_TRAJ || new_state == REPLAN_TRAJ)
+    {
+      std_msgs::msg::Bool reached;
+      reached.data = false;
+      goal_reached_pub_->publish(reached);
+    }
+
     cout << "[" + pos_call + "]: from " + state_str[pre_s] + " to " + state_str[int(new_state)] << endl;
   }
 
@@ -464,6 +512,20 @@ namespace ego_planner
   void EGOReplanFSM::execFSMCallback()
   {
     exec_timer_->cancel(); // To avoid blockage
+
+    // ── Action 反馈 (每周期发布) ──
+    publishActionFeedback();
+
+    // ── Action 取消检查 ──
+    {
+      std::lock_guard<std::mutex> lock(action_mutex_);
+      if (action_active_ && active_goal_handle_ && active_goal_handle_->is_canceling())
+      {
+        RCLCPP_WARN(node_->get_logger(), "[Action] Cancel in progress — triggering emergency stop.");
+        emergency_from_action_cancel_ = true;
+        changeFSMExecState(EMERGENCY_STOP, "ACTION_CANCEL");
+      }
+    }
 
     static int fsm_num = 0;
     fsm_num++;
@@ -540,7 +602,23 @@ namespace ego_planner
       }
       else
       {
-        changeFSMExecState(GEN_NEW_TRAJ, "FSM");
+        // 连续失败达到上限 → 放弃并报告失败
+        if (continously_called_times_ >= max_planning_retries_)
+        {
+          RCLCPP_ERROR(node_->get_logger(),
+                       "[Action] Max planning retries (%d) exceeded. Aborting.",
+                       max_planning_retries_);
+          setActionResult(false, NavigateToPose::Result::ERROR_PLANNING_FAILED,
+                          "Planning failed after max retries (" +
+                              std::to_string(max_planning_retries_) + ").");
+          have_target_ = false;
+          have_trigger_ = false;
+          changeFSMExecState(WAIT_TARGET, "FSM");
+        }
+        else
+        {
+          changeFSMExecState(GEN_NEW_TRAJ, "FSM");
+        }
       }
       break;
     }
@@ -565,7 +643,7 @@ namespace ego_planner
     {
       /* determine if need to replan */
       LocalTrajData *info = &planner_manager_->local_data_;
-      rclcpp::Time time_now = rclcpp::Clock().now();
+      rclcpp::Time time_now = node_->now();
       double t_cur = (time_now - info->start_time_).seconds();
       t_cur = std::min(info->duration_, t_cur);
 
@@ -585,6 +663,21 @@ namespace ego_planner
         {
           have_target_ = false;
           have_trigger_ = false;
+
+          // ── 目标到达 ──
+          {
+            std_msgs::msg::Bool reached;
+            reached.data = true;
+            goal_reached_pub_->publish(reached);
+            RCLCPP_INFO(node_->get_logger(), "[EGO Planner] Goal reached: (%.2f, %.2f, %.2f)",
+                        end_pt_(0), end_pt_(1), end_pt_(2));
+            // Action 成功 (不在锁内调用)
+            setActionResult(true, NavigateToPose::Result::ERROR_NONE,
+                            string("Goal reached: (") +
+                                std::to_string(end_pt_(0)) + ", " +
+                                std::to_string(end_pt_(1)) + ", " +
+                                std::to_string(end_pt_(2)) + ")");
+          }
 
           if (target_type_ == TARGET_TYPE::PRESET_TARGET)
           {
@@ -614,6 +707,18 @@ namespace ego_planner
       if (flag_escape_emergency_) // Avoiding repeated calls
       {
         callEmergencyStop(odom_pos_);
+        // 报告 Action 结果: 区分用户取消 vs 真实紧急停止
+        if (emergency_from_action_cancel_)
+        {
+          setActionResult(false, NavigateToPose::Result::ERROR_CANCELLED,
+                          "Navigation cancelled by user.");
+          emergency_from_action_cancel_ = false;
+        }
+        else
+        {
+          setActionResult(false, NavigateToPose::Result::ERROR_EMERGENCY_STOP,
+                          "Emergency stop triggered.");
+        }
       }
       else
       {
@@ -626,7 +731,7 @@ namespace ego_planner
     }
     }
 
-    data_disp_.header.stamp = rclcpp::Clock().now();
+    data_disp_.header.stamp = node_->now();
     data_disp_pub_->publish(data_disp_);
 
   force_return:;
@@ -665,15 +770,17 @@ namespace ego_planner
 
     LocalTrajData *info = &planner_manager_->local_data_;
     // ros::Time time_now = ros::Time::now();
-    auto time_now = rclcpp::Clock().now();
+    auto time_now = node_->now();
     // double t_cur = (time_now - info->start_time_).toSec();
     double t_cur = (time_now - info->start_time_).seconds();
 
-    start_pt_ = info->position_traj_.evaluateDeBoorT(t_cur);
-    start_vel_ = info->velocity_traj_.evaluateDeBoorT(t_cur);
-    start_acc_ = info->acceleration_traj_.evaluateDeBoorT(t_cur);
+    // 始终以无人机真实位置为起点
+    start_pt_ = odom_pos_;
+    start_vel_ = odom_vel_;
+    start_acc_ = Eigen::Vector3d::Zero();
 
-    bool success = callReboundReplan(false, false);
+    // 强制多项式初始化 — 不用旧轨迹的点, 从 odom_pos_ 重新生成
+    bool success = callReboundReplan(true, false);
 
     if (!success)
     {
@@ -717,12 +824,12 @@ namespace ego_planner
     /* ---------- check trajectory ---------- */
     constexpr double time_step = 0.01;
     // double t_cur = (ros::Time::now() - info->start_time_).toSec();
-    double t_cur = (rclcpp::Clock().now() - info->start_time_).seconds();
+    double t_cur = (node_->now() - info->start_time_).seconds();
 
     Eigen::Vector3d p_cur = info->position_traj_.evaluateDeBoorT(t_cur);
     const double CLEARANCE = 1.0 * planner_manager_->getSwarmClearance();
     // double t_cur_global = ros::Time::now().toSec();
-    double t_cur_global = rclcpp::Clock().now().seconds();
+    double t_cur_global = node_->now().seconds();
 
     double t_2_3 = info->duration_ * 2 / 3;
     for (double t = t_cur; t < info->duration_; t += time_step)
@@ -796,6 +903,18 @@ namespace ego_planner
 
       auto info = &planner_manager_->local_data_;
 
+      // Z 轴锁定: 关闭 Z 规划时, 所有控制点 Z 统一到当前高度
+      if (!enable_z_planning_)
+      {
+        Eigen::MatrixXd pos_pts_z = info->position_traj_.getControlPoint();
+        for (int i = 0; i < pos_pts_z.cols(); ++i)
+          pos_pts_z(2, i) = odom_pos_.z();
+        // 用修正后的控制点重建 B-spline (保持原速度和加速度梯度)
+        info->position_traj_ = UniformBspline(pos_pts_z, 3, info->position_traj_.getTimeSum() / (pos_pts_z.cols() - 3));
+        info->velocity_traj_ = info->position_traj_.getDerivative();
+        info->acceleration_traj_ = info->velocity_traj_.getDerivative();
+      }
+
       traj_utils::msg::Bspline bspline;
       bspline.order = 3;
       bspline.start_time = info->start_time_;
@@ -822,6 +941,17 @@ namespace ego_planner
 
       /* 1. publish traj to traj_server */
       bspline_pub_->publish(bspline);
+
+      /* diagnostic: publish replan start point */
+      {
+        geometry_msgs::msg::PoseStamped diag;
+        diag.header.stamp = node_->now();
+        diag.header.frame_id = "odom";
+        diag.pose.position.x = start_pt_(0);
+        diag.pose.position.y = start_pt_(1);
+        diag.pose.position.z = start_pt_(2);
+        replan_start_pub_->publish(diag);
+      }
 
       /* 2. publish traj to the next drone of swarm */
 
@@ -975,6 +1105,204 @@ namespace ego_planner
     {
       local_target_vel_ = planner_manager_->global_data_.getVelocity(t);
     }
+
+    // Z 轴锁定: 关闭 Z 规划时, 局部目标高度 = 当前高度
+    if (!enable_z_planning_)
+      local_target_pt_.z() = odom_pos_.z();
+  }
+
+  // ────────────────────────────────────────────────────────
+  // Action Server 实现
+  // ────────────────────────────────────────────────────────
+
+  rclcpp_action::GoalResponse EGOReplanFSM::actionHandleGoal(
+      const rclcpp_action::GoalUUID &uuid,
+      std::shared_ptr<const NavigateToPose::Goal> goal)
+  {
+    (void)uuid;
+
+    // 无里程计 → 拒绝
+    if (!have_odom_)
+    {
+      RCLCPP_WARN(node_->get_logger(), "[Action] Goal rejected: no odometry.");
+      return rclcpp_action::GoalResponse::REJECT;
+    }
+
+    // 世界坐标 z < -0.1 → 拒绝 (body_frame 目标允许 z 为任意值)
+    if (!goal->body_frame && goal->pose.pose.position.z < -0.1)
+    {
+      RCLCPP_WARN(node_->get_logger(), "[Action] Goal rejected: z < -0.1 (below ground).");
+      return rclcpp_action::GoalResponse::REJECT;
+    }
+
+    RCLCPP_INFO(node_->get_logger(), "[Action] Goal accepted.");
+    return rclcpp_action::GoalResponse::ACCEPT_AND_EXECUTE;
+  }
+
+  rclcpp_action::CancelResponse EGOReplanFSM::actionHandleCancel(
+      const std::shared_ptr<GoalHandle> goal_handle)
+  {
+    (void)goal_handle;
+    RCLCPP_INFO(node_->get_logger(), "[Action] Cancel requested — will stop at next FSM cycle.");
+    return rclcpp_action::CancelResponse::ACCEPT;
+  }
+
+  void EGOReplanFSM::actionHandleAccepted(
+      const std::shared_ptr<GoalHandle> goal_handle)
+  {
+    RCLCPP_INFO(node_->get_logger(), "[Action] Goal accepted, starting execution.");
+
+    // 如果已有活跃 Action, 先 abort 旧目标
+    {
+      std::lock_guard<std::mutex> lock(action_mutex_);
+      if (active_goal_handle_ && active_goal_handle_->is_active())
+      {
+        auto result = std::make_shared<NavigateToPose::Result>();
+        result->success = false;
+        result->error_code = NavigateToPose::Result::ERROR_CANCELLED;
+        result->message = "Replaced by a new action goal.";
+        active_goal_handle_->abort(result);
+        RCLCPP_WARN(node_->get_logger(), "[Action] Previous goal aborted (replaced).");
+      }
+      active_goal_handle_ = goal_handle;
+      action_active_ = true;
+      action_start_time_ = node_->now();
+    }
+
+    // 坐标转换: body_frame → world, 或直接提取世界坐标
+    Eigen::Vector3d end_wp;
+    if (goal_handle->get_goal()->body_frame)
+    {
+      end_wp = actionGoalToWorld(*goal_handle->get_goal());
+    }
+    else
+    {
+      end_wp(0) = goal_handle->get_goal()->pose.pose.position.x;
+      end_wp(1) = goal_handle->get_goal()->pose.pose.position.y;
+      end_wp(2) = goal_handle->get_goal()->pose.pose.position.z;
+      if (fabs(end_wp(2)) < 0.01)
+        end_wp(2) = 1.0; // 默认高度 1m
+    }
+
+    action_goal_pose_ = goal_handle->get_goal()->pose;
+
+    RCLCPP_INFO(node_->get_logger(), "[Action] Target: (%.2f, %.2f, %.2f) body_frame=%d",
+                end_wp(0), end_wp(1), end_wp(2), goal_handle->get_goal()->body_frame);
+
+    have_trigger_ = true;
+    init_pt_ = odom_pos_;
+    planNextWaypoint(end_wp);
+  }
+
+  Eigen::Vector3d EGOReplanFSM::actionGoalToWorld(const NavigateToPose::Goal &goal)
+  {
+    // 与 goalBodyCallback 完全一致的机体→世界坐标转换
+    Eigen::Vector3d body_offset(goal.pose.pose.position.x,
+                                goal.pose.pose.position.y,
+                                goal.pose.pose.position.z);
+
+    // 仅偏航旋转 (忽略 roll/pitch)
+    Eigen::AngleAxisd yaw_rot(
+        atan2(2.0 * (odom_orient_.w() * odom_orient_.z() +
+                     odom_orient_.x() * odom_orient_.y()),
+              1.0 - 2.0 * (odom_orient_.y() * odom_orient_.y() +
+                           odom_orient_.z() * odom_orient_.z())),
+        Eigen::Vector3d::UnitZ());
+    Eigen::Vector3d world_offset = yaw_rot * body_offset;
+    world_offset.z() = body_offset.z();
+
+    Eigen::Vector3d end_wp = odom_pos_ + world_offset;
+    if (end_wp.z() < 0.1)
+      end_wp.z() = 0.5;
+    return end_wp;
+  }
+
+  void EGOReplanFSM::publishActionFeedback()
+  {
+    // 节流: 10Hz (100ms 间隔)
+    auto now = node_->now();
+    if ((now - last_feedback_time_).seconds() < 0.1)
+      return;
+    last_feedback_time_ = now;
+
+    std::lock_guard<std::mutex> lock(action_mutex_);
+
+    if (!action_active_ || !active_goal_handle_ || !active_goal_handle_->is_active())
+      return;
+
+    auto feedback = std::make_shared<NavigateToPose::Feedback>();
+
+    // 当前位置
+    feedback->current_pose.header.stamp = node_->now();
+    feedback->current_pose.header.frame_id = "odom";
+    feedback->current_pose.pose.position.x = odom_pos_(0);
+    feedback->current_pose.pose.position.y = odom_pos_(1);
+    feedback->current_pose.pose.position.z = odom_pos_(2);
+    feedback->current_pose.pose.orientation.w = odom_orient_.w();
+    feedback->current_pose.pose.orientation.x = odom_orient_.x();
+    feedback->current_pose.pose.orientation.y = odom_orient_.y();
+    feedback->current_pose.pose.orientation.z = odom_orient_.z();
+
+    // 剩余距离
+    double dist = (end_pt_ - odom_pos_).norm();
+    feedback->distance_remaining = static_cast<float>(dist);
+
+    // 进度百分比 (基于全局轨迹时间)
+    if (planner_manager_->global_data_.global_duration_ > 0)
+    {
+      double progress = planner_manager_->global_data_.last_progress_time_ /
+                        planner_manager_->global_data_.global_duration_;
+      feedback->progress_percentage = static_cast<float>(std::min(progress, 1.0) * 100.0);
+    }
+    else
+    {
+      feedback->progress_percentage = 0.0f;
+    }
+
+    // FSM 状态字符串
+    static const char *state_names[] = {
+        "INIT", "WAIT_TARGET", "GEN_NEW_TRAJ", "REPLAN_TRAJ",
+        "EXEC_TRAJ", "EMERGENCY_STOP", "SEQUENTIAL_START"};
+    int state_idx = static_cast<int>(exec_state_);
+    if (state_idx >= 0 && state_idx < 7)
+      feedback->fsm_state = state_names[state_idx];
+    else
+      feedback->fsm_state = "UNKNOWN";
+
+    active_goal_handle_->publish_feedback(feedback);
+  }
+
+  void EGOReplanFSM::setActionResult(bool success, uint8_t error_code, const std::string &message)
+  {
+    std::lock_guard<std::mutex> lock(action_mutex_);
+
+    if (!action_active_ || !active_goal_handle_)
+      return;
+
+    auto result = std::make_shared<NavigateToPose::Result>();
+    result->success = success;
+    result->error_code = error_code;
+    result->message = message;
+
+    if (!active_goal_handle_->is_active())
+    {
+      action_active_ = false;
+      active_goal_handle_.reset();
+      return;
+    }
+
+    if (error_code == NavigateToPose::Result::ERROR_CANCELLED)
+      active_goal_handle_->canceled(result);
+    else if (success)
+      active_goal_handle_->succeed(result);
+    else
+      active_goal_handle_->abort(result);
+
+    RCLCPP_INFO(node_->get_logger(), "[Action] Result: success=%d code=%d msg=%s",
+                success, error_code, message.c_str());
+
+    action_active_ = false;
+    active_goal_handle_.reset();
   }
 
 } // namespace ego_planner

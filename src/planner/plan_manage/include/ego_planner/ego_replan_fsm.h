@@ -4,11 +4,13 @@
 #include <Eigen/Eigen>
 #include <algorithm>
 #include <iostream>
+#include <mutex>
 #include "nav_msgs/msg/path.hpp"
 #include "nav_msgs/msg/odometry.hpp"
 #include "sensor_msgs/msg/imu.hpp"
 #include "rclcpp/rclcpp.hpp"
-#include "std_msgs/msg/empty.hpp"
+#include "rclcpp_action/rclcpp_action.hpp"
+#include "std_msgs/msg/bool.hpp"
 #include <vector>
 #include "visualization_msgs/msg/marker.hpp"
 
@@ -20,6 +22,7 @@
 #include "traj_utils/msg/data_disp.hpp"
 #include "ego_planner/planner_manager.h"
 #include "traj_utils/planning_visualization.h"
+#include "ego_planner/action/navigate_to_pose.hpp"
 
 using std::vector;
 
@@ -79,6 +82,23 @@ namespace ego_planner
     int current_wp_;
 
     bool flag_escape_emergency_;
+    bool emergency_from_action_cancel_{false}; // true=紧急停止由 Action 取消触发
+
+    /* Z 轴规划使能 */
+    bool enable_z_planning_{true};   // true=正常3D规划, false=锁定Z轴(仅XY平面)
+
+    /* Action server */
+    using NavigateToPose = ego_planner::action::NavigateToPose;
+    using GoalHandle = rclcpp_action::ServerGoalHandle<NavigateToPose>;
+
+    rclcpp_action::Server<NavigateToPose>::SharedPtr action_server_;
+    std::mutex action_mutex_;
+    std::shared_ptr<GoalHandle> active_goal_handle_;
+    bool action_active_{false};
+    rclcpp::Time action_start_time_;
+    geometry_msgs::msg::PoseStamped action_goal_pose_;
+    int max_planning_retries_{10};
+    rclcpp::Time last_feedback_time_; // 反馈节流
 
     /* ROS utils */
     rclcpp::Node::SharedPtr node_;
@@ -94,8 +114,11 @@ namespace ego_planner
     // rclcpp::Publisher<std_msgs::msg::Empty>::SharedPtr new_pub_;
     rclcpp::Publisher<traj_utils::msg::Bspline>::SharedPtr bspline_pub_;
     rclcpp::Publisher<traj_utils::msg::DataDisp>::SharedPtr data_disp_pub_;
+    rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr current_pose_pub_;   // 当前里程计位姿
+    rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr replan_start_pub_;   // 重规划起点 (诊断)
     rclcpp::Publisher<traj_utils::msg::MultiBsplines>::SharedPtr swarm_trajs_pub_;
     rclcpp::Publisher<traj_utils::msg::Bspline>::SharedPtr broadcast_bspline_pub_;
+    rclcpp::Publisher<std_msgs::msg::Bool>::SharedPtr goal_reached_pub_;  // 目标到达状态
 
     /* helper functions */
     bool callReboundReplan(bool flag_use_poly_init, bool flag_randomPolyTraj); // front-end and back-end method
@@ -123,6 +146,18 @@ namespace ego_planner
 
     bool checkCollision();
     void publishSwarmTrajs(bool startup_pub);
+
+    /* Action callbacks */
+    rclcpp_action::GoalResponse actionHandleGoal(
+        const rclcpp_action::GoalUUID &uuid,
+        std::shared_ptr<const NavigateToPose::Goal> goal);
+    rclcpp_action::CancelResponse actionHandleCancel(
+        const std::shared_ptr<GoalHandle> goal_handle);
+    void actionHandleAccepted(
+        const std::shared_ptr<GoalHandle> goal_handle);
+    void publishActionFeedback();
+    void setActionResult(bool success, uint8_t error_code, const std::string &message);
+    Eigen::Vector3d actionGoalToWorld(const NavigateToPose::Goal &goal);
 
   public:
     EGOReplanFSM(/* args */)

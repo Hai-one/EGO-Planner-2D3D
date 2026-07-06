@@ -1,9 +1,19 @@
-.vscode/settings.json
-.catkin_workspace
+# ── Build & Install (ROS 2 colcon) ──
 build/
-devel/
-files/
-src/CMakeLists.txt
-benchmark_haha.zip
-rebound_planner_BB.zip
+install/
+log/
 
+# ── Python ──
+__pycache__/
+*.pyc
+*.pyo
+
+# ── IDE ──
+.vscode/
+
+# ── Archives ──
+*.zip
+
+# ── OS ──
+Thumbs.db
+.DS_Store

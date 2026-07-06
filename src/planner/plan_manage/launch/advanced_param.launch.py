@@ -113,14 +113,15 @@ def generate_launch_description():
         ],
         parameters=[
             {'fsm/flight_type': flight_type},
-            {'fsm/thresh_replan_time': 1.0},
-            {'fsm/thresh_no_replan_meter': 1.0},
+            {'fsm/thresh_replan_time': 0.15},    # 实时避障: 150ms 重规划周期
+            {'fsm/thresh_no_replan_meter': 0.5},   # 接近目标阈值
             {'fsm/planning_horizon': planning_horizon},
             {'fsm/planning_horizen_time': 3.0},
             {'fsm/emergency_time': 1.0},
             {'fsm/realworld_experiment': False},
             {'fsm/fail_safe': True},
-            
+            {'fsm/enable_z_planning': True},     # Z轴规划使能 (false=仅XY平面)
+
             {'fsm/waypoint_num': point_num},
             {'fsm/waypoint0_x': point0_x},
             {'fsm/waypoint0_y': point0_y},
@@ -145,7 +146,10 @@ def generate_launch_description():
             {'grid_map/local_update_range_x': 5.5},
             {'grid_map/local_update_range_y': 5.5},
             {'grid_map/local_update_range_z': 4.5},
-            {'grid_map/obstacles_inflation': 0.099},
+            {'grid_map/obstacles_inflation': 0.099},       # XY 膨胀半径 [m]
+            {'grid_map/obstacles_inflation_z': -1.0},    # Z 轴膨胀半径 [m], -1=自动等于XY
+            {'grid_map/self_filter_radius': 0.3},      # 自身滤除半径 [m]
+            {'grid_map/local_inflation_range': 3.0},    # 局部膨胀范围 [m] (水平)
             {'grid_map/local_map_margin': 10},
             {'grid_map/ground_height': -0.01},
             # camera parameter
@@ -171,7 +175,7 @@ def generate_launch_description():
             {'grid_map/max_ray_length': 4.5},
             
             {'grid_map/virtual_ceil_height': 2.9},
-            {'grid_map/visualization_truncate_height': 1.8},
+            {'grid_map/visualization_truncate_height': 2.0},
             {'grid_map/show_occ_time': False},
             {'grid_map/pose_type': 1},
             {'grid_map/frame_id': "world"},

@@ -1,0 +1,32 @@
+# ========== NavigateToPose Action Definition ==========
+# Goal: Send a target pose for the drone to navigate to.
+# - pose: Target pose in world frame (odom) or body frame depending on body_frame flag.
+# - body_frame: If true, pose is interpreted as a body-frame offset (relative to current drone pose).
+#               x=forward, y=left, z=up. Converted server-side to world frame.
+#               If false (default), pose is in the world frame (ENU, odom).
+geometry_msgs/PoseStamped pose
+bool body_frame false
+---
+# Result
+# - success: true if the drone reached the goal within tolerance.
+# - message: Human-readable description of the outcome.
+# - error_code: Machine-readable error classification (see constants below).
+bool success
+string message
+uint8 ERROR_NONE=0
+uint8 ERROR_PLANNING_FAILED=1
+uint8 ERROR_COLLISION=2
+uint8 ERROR_EMERGENCY_STOP=3
+uint8 ERROR_CANCELLED=4
+uint8 ERROR_NO_ODOMETRY=5
+uint8 error_code
+---
+# Feedback
+# - current_pose: Current drone pose in odom frame.
+# - distance_remaining: Euclidean distance to the final goal [m].
+# - progress_percentage: 0.0 to 100.0 (estimated along global trajectory).
+# - fsm_state: Current FSM state name for diagnostics.
+geometry_msgs/PoseStamped current_pose
+float32 distance_remaining
+float32 progress_percentage
+string fsm_state
