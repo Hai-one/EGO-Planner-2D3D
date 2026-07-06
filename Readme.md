@@ -87,6 +87,13 @@ echo "export RMW_IMPLEMENTATION=rmw_cyclonedds_cpp" >> ~/.bashrc
 source ~/.bashrc
 ```
 
+**Odin 驱动**: 需要 [odin_ros_driver](https://github.com/manifoldsdk/odin_ros_driver)，克隆到工作空间的 `src/` 并编译。
+
+```bash
+cd ~/odin_ws_3D/src
+git clone https://github.com/manifoldsdk/odin_ros_driver.git
+```
+
 ### 2. 编译
 
 ```bash
