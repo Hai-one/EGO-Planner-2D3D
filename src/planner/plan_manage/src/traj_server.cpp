@@ -20,6 +20,10 @@
 //   ~/yaw_setpoint       (std_msgs::msg::Float32)           – 期望偏航角 [rad]
 //   /position_cmd        (quadrotor_msgs::msg::PositionCommand) – 完整指令(保持兼容)
 
+// ── 全局句柄（避免每次回调创建时钟）──
+rclcpp::Node::SharedPtr g_node_;
+rclcpp::Clock::SharedPtr g_clock_;
+
 rclcpp::Publisher<quadrotor_msgs::msg::PositionCommand>::SharedPtr pos_cmd_pub;
 rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr pos_setpoint_pub_;
 rclcpp::Publisher<geometry_msgs::msg::TwistStamped>::SharedPtr vel_setpoint_pub_;
@@ -29,8 +33,8 @@ quadrotor_msgs::msg::PositionCommand cmd;
 geometry_msgs::msg::PoseStamped pos_setpoint_;
 geometry_msgs::msg::TwistStamped vel_setpoint_;
 std_msgs::msg::Float32 yaw_setpoint_;
-double pos_gain[3] = {0, 0, 0};
-double vel_gain[3] = {0, 0, 0};
+double pos_gain_[3] = {5.0, 5.0, 5.0};
+double vel_gain_[3] = {2.0, 2.0, 2.0};
 
 using ego_planner::UniformBspline;
 
@@ -189,15 +193,14 @@ void cmdCallback()
   if (!receive_traj_)
     return;
 
-  // 统一时间源
-  rclcpp::Clock clock(RCL_ROS_TIME);
-  rclcpp::Time time_now = clock.now();
+  // ── 统一时间源：使用节点时钟（与 planner 同步）──
+  rclcpp::Time time_now = g_clock_->now();
   double t_cur = (time_now - start_time_).seconds();
 
   Eigen::Vector3d pos(Eigen::Vector3d::Zero()), vel(Eigen::Vector3d::Zero()), acc(Eigen::Vector3d::Zero()), pos_f;
   std::pair<double, double> yaw_yawdot(0, 0);
 
-  static rclcpp::Time time_last = clock.now();
+  static rclcpp::Time time_last = time_now;
   if (t_cur < traj_duration_ && t_cur >= 0.0)
   {
     pos = traj_[0].evaluateDeBoorT(t_cur);
@@ -229,18 +232,30 @@ void cmdCallback()
   }
   time_last = time_now;
 
-  // ── 偏离检测: 无人机超出轨迹起点太远 → 原地悬停 ──
+  // ── 偏离检测：平滑收敛，避免位置突变 ──
+  static Eigen::Vector3d last_target_pos_ = Eigen::Vector3d::Zero();
   if (have_odom_ && receive_traj_)
   {
     double dev = (odom_pos_ - pos).norm();
     if (dev > max_deviation_)
     {
-      pos = odom_pos_;
+      // 平滑收敛到当前里程计位置（max 0.03m/tick = 3m/s 修正速率）
+      const double max_correction = 0.03;
+      Eigen::Vector3d correction = odom_pos_ - pos;
+      double corr_norm = correction.norm();
+      if (corr_norm > max_correction)
+        correction = correction / corr_norm * max_correction;
+      pos = pos + correction;   // 平滑过渡，不突变
       vel.setZero();
       acc.setZero();
       yaw_yawdot.first = last_yaw_;
       yaw_yawdot.second = 0.0;
+
+      RCLCPP_WARN_THROTTLE(g_node_->get_logger(), *g_clock_, 1000,
+          "[Traj server] deviation %.2fm > %.2fm — holding & converging, t_cur=%.2f",
+          dev, max_deviation_, t_cur);
     }
+    last_target_pos_ = pos;
   }
 
   // ── 填充自定义消息 (保持兼容) ──
@@ -302,6 +317,8 @@ int main(int argc, char **argv)
 {
   rclcpp::init(argc, argv);
   auto node = rclcpp::Node::make_shared("traj_server");
+  g_node_ = node;
+  g_clock_ = std::make_shared<rclcpp::Clock>(node->get_clock()->get_clock_type());
 
   auto bspline_sub = node->create_subscription<traj_utils::msg::Bspline>(
       "planning/bspline",
@@ -313,8 +330,22 @@ int main(int argc, char **argv)
       10,
       odomCallback);
 
-  node->declare_parameter("traj_server/max_deviation", 0.5);
+  node->declare_parameter("traj_server/max_deviation", 1.0);
   node->get_parameter("traj_server/max_deviation", max_deviation_);
+
+  node->declare_parameter("traj_server/pos_gain_x", 5.0);
+  node->declare_parameter("traj_server/pos_gain_y", 5.0);
+  node->declare_parameter("traj_server/pos_gain_z", 5.0);
+  node->declare_parameter("traj_server/vel_gain_x", 2.0);
+  node->declare_parameter("traj_server/vel_gain_y", 2.0);
+  node->declare_parameter("traj_server/vel_gain_z", 2.0);
+
+  node->get_parameter("traj_server/pos_gain_x", pos_gain_[0]);
+  node->get_parameter("traj_server/pos_gain_y", pos_gain_[1]);
+  node->get_parameter("traj_server/pos_gain_z", pos_gain_[2]);
+  node->get_parameter("traj_server/vel_gain_x", vel_gain_[0]);
+  node->get_parameter("traj_server/vel_gain_y", vel_gain_[1]);
+  node->get_parameter("traj_server/vel_gain_z", vel_gain_[2]);
 
   // ── 自定义消息输出 (保持兼容) ──
   pos_cmd_pub = node->create_publisher<quadrotor_msgs::msg::PositionCommand>(
@@ -334,13 +365,13 @@ int main(int argc, char **argv)
       cmdCallback);
 
   /* control parameter */
-  cmd.kx[0] = pos_gain[0];
-  cmd.kx[1] = pos_gain[1];
-  cmd.kx[2] = pos_gain[2];
+  cmd.kx[0] = pos_gain_[0];
+  cmd.kx[1] = pos_gain_[1];
+  cmd.kx[2] = pos_gain_[2];
 
-  cmd.kv[0] = vel_gain[0];
-  cmd.kv[1] = vel_gain[1];
-  cmd.kv[2] = vel_gain[2];
+  cmd.kv[0] = vel_gain_[0];
+  cmd.kv[1] = vel_gain_[1];
+  cmd.kv[2] = vel_gain_[2];
 
   node->declare_parameter("traj_server/time_forward", -1.0);
   node->get_parameter("traj_server/time_forward", time_forward_);

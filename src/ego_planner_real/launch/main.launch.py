@@ -267,7 +267,13 @@ def generate_launch_description():
         ],
         parameters=[
             {'traj_server/time_forward': 1.0},                  # 偏航前瞻时间 [s]
-            {'traj_server/max_deviation': 0.5},                 # 最大偏离 [m], 超过则原地悬停
+            {'traj_server/max_deviation': 1.0},                 # 最大偏离 [m], 超过则悬停+平滑收敛
+            {'traj_server/pos_gain_x': 5.0},                    # 位置增益 X [飞控用]
+            {'traj_server/pos_gain_y': 5.0},
+            {'traj_server/pos_gain_z': 5.0},
+            {'traj_server/vel_gain_x': 2.0},                    # 速度增益 X [飞控用]
+            {'traj_server/vel_gain_y': 2.0},
+            {'traj_server/vel_gain_z': 2.0},
         ]
     )
 
