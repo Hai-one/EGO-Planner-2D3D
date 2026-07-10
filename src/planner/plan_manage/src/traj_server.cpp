@@ -48,7 +48,6 @@ int traj_id_;
 Eigen::Vector3d odom_pos_ = Eigen::Vector3d::Zero();
 bool have_odom_ = false;
 double max_deviation_ = 0.5;  // 允许的最大偏离 [m]
-double min_vel_ = 0.0;         // 最小输出速度 [m/s], 0=不启用; 低于此值的速度被放大
 
 // yaw control
 double last_yaw_, last_yaw_dot_;
@@ -233,16 +232,6 @@ void cmdCallback()
   }
   time_last = time_now;
 
-  // ── 最小速度钳位：低于阈值的速度被放大到 min_vel ──
-  if (min_vel_ > 0.0 && t_cur < traj_duration_ && t_cur >= 0.0)
-  {
-    double vel_mag = vel.norm();
-    if (vel_mag > 0.02 && vel_mag < min_vel_)
-    {
-      vel = vel / vel_mag * min_vel_;  // 保持方向，放大到 min_vel
-    }
-  }
-
   // ── 偏离检测：平滑收敛，避免位置突变 ──
   static Eigen::Vector3d last_target_pos_ = Eigen::Vector3d::Zero();
   if (have_odom_ && receive_traj_)
@@ -343,8 +332,6 @@ int main(int argc, char **argv)
 
   node->declare_parameter("traj_server/max_deviation", 1.0);
   node->get_parameter("traj_server/max_deviation", max_deviation_);
-  node->declare_parameter("traj_server/min_vel", 0.0);
-  node->get_parameter("traj_server/min_vel", min_vel_);
 
   node->declare_parameter("traj_server/pos_gain_x", 5.0);
   node->declare_parameter("traj_server/pos_gain_y", 5.0);

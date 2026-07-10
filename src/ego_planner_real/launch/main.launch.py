@@ -274,7 +274,6 @@ def generate_launch_description():
             {'traj_server/vel_gain_x': 2.0},                    # 速度增益 X [飞控用]
             {'traj_server/vel_gain_y': 2.0},
             {'traj_server/vel_gain_z': 2.0},
-            {'traj_server/min_vel': 0.25},                     # 最小输出速度 [m/s], 0=不启用
         ]
     )
 
