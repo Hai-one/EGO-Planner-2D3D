@@ -207,8 +207,8 @@ void cmdCallback()
     double moved = (odom_pos_ - traj_start_pos_).norm();
     if (moved < 0.1)
     {
-      // 把 t_cur 固定在 0.2s 处（跳过初始瞬态，曲线已稳定）
-      t_cur = std::min(t_cur, 0.2);
+      // 把 t_cur 固定在起点（速度 = max_vel，稳定不变）
+      t_cur = 0.0;
     }
   }
 
