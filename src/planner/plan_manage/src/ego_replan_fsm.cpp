@@ -808,9 +808,16 @@ namespace ego_planner
 
     LocalTrajData *info = &planner_manager_->local_data_;
     auto map = planner_manager_->grid_map_;
-    
+
     if (exec_state_ == WAIT_TARGET || info->start_time_.seconds() < 1e-5)
       return;
+
+    // ── 无人机未明显移动时跳过碰撞检测，避免原地反复重规划 ──
+    {
+      double dist_from_start = (odom_pos_ - info->start_pos_).norm();
+      if (dist_from_start < 0.3)  // 移动不足 0.3m，认为尚未起飞
+        return;
+    }
 
     /* ---------- check lost of depth ---------- */
     if (map->getOdomDepthTimeout())
