@@ -746,7 +746,14 @@ namespace ego_planner
   bool EGOReplanFSM::planFromGlobalTraj(const int trial_times /*=1*/) // zx-todo
   {
     start_pt_ = odom_pos_;
-    start_vel_ = odom_vel_;
+    // 不依赖飞机当前速度，直接用目标方向 × max_vel
+    {
+      Eigen::Vector3d diff = end_pt_ - start_pt_;
+      if (diff.norm() > 0.01)
+        start_vel_ = diff.normalized() * planner_manager_->pp_.max_vel_;
+      else
+        start_vel_ = odom_vel_;  // fallback: 目标太近
+    }
     start_acc_.setZero();
 
     bool flag_random_poly_init;
@@ -774,9 +781,15 @@ namespace ego_planner
     // double t_cur = (time_now - info->start_time_).toSec();
     double t_cur = (time_now - info->start_time_).seconds();
 
-    // 始终以无人机真实位置为起点
+    // 始终以无人机真实位置为起点，速度不依赖当前状态
     start_pt_ = odom_pos_;
-    start_vel_ = odom_vel_;
+    {
+      Eigen::Vector3d diff = end_pt_ - start_pt_;
+      if (diff.norm() > 0.01)
+        start_vel_ = diff.normalized() * planner_manager_->pp_.max_vel_;
+      else
+        start_vel_ = odom_vel_;
+    }
     start_acc_ = Eigen::Vector3d::Zero();
 
     // 强制多项式初始化 — 不用旧轨迹的点, 从 odom_pos_ 重新生成
