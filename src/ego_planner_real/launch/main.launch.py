@@ -14,9 +14,9 @@
         "{pose: {header: {frame_id: 'odom'}, pose: {position: {x: 5.0, y: 0.0, z: 1.5}}}}"
 
 输出接口 (飞控桥接):
-    /drone_0_traj_server/position_setpoint   PoseStamped   100Hz
-    /drone_0_traj_server/velocity_setpoint   TwistStamped  100Hz
-    /drone_0_traj_server/yaw_setpoint        Float32       100Hz
+    /drone_0_traj_server/position_setpoint   PoseStamped   20HZ
+    /drone_0_traj_server/velocity_setpoint   TwistStamped  20HZ
+    /drone_0_traj_server/yaw_setpoint        Float32       20HZ
     /drone_0_ego_planner_node/goal_reached   Bool          到达通知
 """
 
@@ -35,19 +35,19 @@ def generate_launch_description():
     #  传感器话题 (Odin 驱动发布)
     # ================================================================
     odom_topic   = LaunchConfiguration('odom_topic',
-                     default='/odin1/odometry')            # 里程计话题 [Odin SLAM odom]
+                     default='/Odometry')            # 里程计话题 [Odin SLAM odom]
     cloud_topic  = LaunchConfiguration('cloud_topic',
-                     default='/odin1/cloud_slam')          # SLAM 点云话题 [PointCloud2]
-    depth_topic  = LaunchConfiguration('depth_topic',
-                     default='/odin1/depth_img_competetion') # 深度融合图 [Image]
+                     default='/cloud_registered')          # SLAM 点云话题 [PointCloud2]
+    # depth_topic  = LaunchConfiguration('depth_topic',
+    #                  default='/odin1/depth_img_competetion') # 深度融合图 [Image]
 
     # ================================================================
     #  运动限制 — 初次飞行保持保守, 稳定后逐步放开
     # ================================================================
     drone_id          = LaunchConfiguration('drone_id',           default='0')
     max_vel           = LaunchConfiguration('max_vel',            default='1.0')   # 最大线速度 [m/s], 建议 0.5~2.0
-    max_acc           = LaunchConfiguration('max_acc',            default='2.0')   # 最大加速度 [m/s²], 建议 1.0~4.0
-    planning_horizon  = LaunchConfiguration('planning_horizon',   default='5.0')   # 规划视界 [m], 局部路径长度, 3~10m
+    max_acc           = LaunchConfiguration('max_acc',            default='2.0')#default 2.0   # 最大加速度 [m/s²], 建议 1.0~4.0
+    planning_horizon  = LaunchConfiguration('planning_horizon',   default='3.0')   # 规划视界 [m], 局部路径长度, 3~10m
 
     # ================================================================
     #  栅格地图 — 决定避障行为
@@ -58,15 +58,15 @@ def generate_launch_description():
 
     # ── 障碍物膨胀 ──
     inflation       = LaunchConfiguration('inflation',
-                        default='0.15')   # 膨胀半径 [m] (XY), 每个障碍物点向外膨胀此距离
+                        default='0.35')   # 膨胀半径 [m] (XY), 每个障碍物点向外膨胀此距离
                                           # 越大越安全但可能堵死通道, 0.10~0.30
     inflation_z     = LaunchConfiguration('inflation_z',
                         default='-1.0')   # Z 轴膨胀半径 [m], -1 表示自动等于 inflation
     self_filter_r   = LaunchConfiguration('self_filter_r',
-                        default='0.4')    # 自身滤除半径 [m], 此范围内的点云被忽略
+                        default='0.20')    # 自身滤除半径 [m], 此范围内的点云被忽略
                                           # 防止无人机本体被当作障碍物, 0.2~0.5
     local_inflate_r = LaunchConfiguration('local_inflate_r',
-                        default='3.0')    # 局部膨胀范围 [m](水平), 超出此范围的障碍物不膨胀
+                        default='2.0')    # 局部膨胀范围 [m](水平), 超出此范围的障碍物不膨胀
                                           # 减少远处噪点干扰, 2.0~5.0
 
     use_rviz = LaunchConfiguration('use_rviz', default='true')
@@ -75,7 +75,7 @@ def generate_launch_description():
     viz_trunc_height = LaunchConfiguration('viz_trunc_height', default='2.0')
 
     # ── Z 轴规划 ──
-    enable_z_planning = LaunchConfiguration('enable_z_planning', default='false')
+    enable_z_planning = LaunchConfiguration('enable_z_planning', default='true')
 
     # ================================================================
     #  参数声明
@@ -85,8 +85,8 @@ def generate_launch_description():
             description='里程计话题 [/odin1/odometry 或 /odin1/odometry_highfreq]'),
         DeclareLaunchArgument('cloud_topic',      default_value=cloud_topic,
             description='SLAM 点云话题 [/odin1/cloud_slam]'),
-        DeclareLaunchArgument('depth_topic',      default_value=depth_topic,
-            description='深度融合图话题'),
+        # DeclareLaunchArgument('depth_topic',      default_value=depth_topic,
+        #     description='深度融合图话题'),
         DeclareLaunchArgument('drone_id',         default_value=drone_id),
         DeclareLaunchArgument('max_vel',          default_value=max_vel,
             description='最大线速度 [m/s], 首次飞行建议 0.5~1.0'),
@@ -113,14 +113,14 @@ def generate_launch_description():
     ]
 
     # ================================================================
-    #  TF: odom → odin1_base_link (兜底)
+    #  TF: odom → body (兜底)
     #  Odin 连上后会发布动态 TF 覆盖此静态值, 模型跟随无人机移动
     # ================================================================
     fallback_tf = Node(
         package='tf2_ros',
         executable='static_transform_publisher',
         name='odom_to_base_tf',
-        arguments=['0','0','0','0','0','0', 'odom', 'odin1_base_link'],
+        arguments=['0','0','0','0','0','0', 'odom', 'body'],
         output='screen',
     )
 
@@ -143,11 +143,11 @@ def generate_launch_description():
     # ================================================================
     #  Odin ROS Driver (传感器驱动, 发布 odometry + 点云 + TF)
     # ================================================================
-    odin_launch = IncludeLaunchDescription(
-        PythonLaunchDescriptionSource(os.path.join(
-            get_package_share_directory('odin_ros_driver'),
-            'launch', 'odin1_ros2.launch.py')),
-    )
+    # odin_launch = IncludeLaunchDescription(
+    #     PythonLaunchDescriptionSource(os.path.join(
+    #         get_package_share_directory('odin_ros_driver'),
+    #         'launch', 'odin1_ros2.launch.py')),
+    # )
 
     # ================================================================
     #  EGO-Planner 主节点 — FSM + A* + B-spline 优化
@@ -163,7 +163,7 @@ def generate_launch_description():
             ('odom_world',                     odom_topic),
             ('grid_map/odom',                  odom_topic),
             ('grid_map/cloud',                 cloud_topic),
-            ('grid_map/depth',                 depth_topic),
+            # ('grid_map/depth',                 depth_topic),
             ('planning/bspline',               ['/drone_', drone_id, '_planning/bspline']),
             ('planning/data_display',          ['/drone_', drone_id, '_planning/data_display']),
             ('goal_point',                     ['/drone_', drone_id, '_plan_vis/goal_point']),
@@ -188,7 +188,7 @@ def generate_launch_description():
 
             # ═══════════════ 栅格地图 ═══════════════
             {'grid_map/frame_id': 'odom'},             # 地图坐标系 (对齐 Odin)
-            {'grid_map/resolution': 0.15},             # 栅格分辨率 [m], 越小越精细但计算量越大
+            {'grid_map/resolution': 0.1},              # 栅格分辨率 [m], 越小越精细但计算量越大
             {'grid_map/map_size_x': map_size_x},
             {'grid_map/map_size_y': map_size_y},
             {'grid_map/map_size_z': map_size_z},
@@ -221,7 +221,7 @@ def generate_launch_description():
             {'grid_map/p_occ': 0.80},
             {'grid_map/min_ray_length': 0.1}, {'grid_map/max_ray_length': 4.5},
             # ── 虚拟天花板 ──
-            {'grid_map/virtual_ceil_height': 2.9},       # 虚拟天花板高度 [m], 限制飞行高度
+            {'grid_map/virtual_ceil_height': 4.0},       # 虚拟天花板高度 [m], 限制飞行高度
             {'grid_map/visualization_truncate_height': viz_trunc_height},
             {'grid_map/show_occ_time': False},
             {'grid_map/pose_type': 2},                   # 2=Odometry (Odin 发布的是 Odometry, 非 PoseStamped)
@@ -294,7 +294,7 @@ def generate_launch_description():
     ld = LaunchDescription()
     for a in args:
         ld.add_action(a)
-    ld.add_action(odin_launch)
+    # ld.add_action(odin_launch)
     ld.add_action(fallback_tf)
     ld.add_action(robot_state_pub)
     ld.add_action(ego_planner_node)
