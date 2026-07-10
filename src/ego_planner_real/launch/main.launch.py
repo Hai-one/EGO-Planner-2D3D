@@ -11,7 +11,7 @@
 输入接口 (发送目标点):
     ros2 action send_goal /drone_0_ego_planner_node/navigate_to_pose \
         ego_planner/action/NavigateToPose \
-        "{pose: {header: {frame_id: 'odom'}, pose: {position: {x: 5.0, y: 0.0, z: 1.5}}}}"
+        "{pose: {header: {frame_id: 'odom'}, pose: {position: {x: 1.0, y: 0.0, z: 1.5}}}}"
 
 输出接口 (飞控桥接):
     /drone_0_traj_server/position_setpoint   PoseStamped   20HZ
@@ -274,6 +274,7 @@ def generate_launch_description():
             {'traj_server/vel_gain_x': 2.0},                    # 速度增益 X [飞控用]
             {'traj_server/vel_gain_y': 2.0},
             {'traj_server/vel_gain_z': 2.0},
+            {'traj_server/min_vel': 0.0},                     # 最小输出速度 [m/s], 0=不启用
         ]
     )
 
