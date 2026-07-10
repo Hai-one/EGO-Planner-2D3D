@@ -17,6 +17,7 @@
     /drone_0_traj_server/position_setpoint   PoseStamped   20HZ
     /drone_0_traj_server/velocity_setpoint   TwistStamped  20HZ
     /drone_0_traj_server/yaw_setpoint        Float32       20HZ
+    /drone_0_traj_server/cmd_vel             Twist         20HZ    (仿move_base)
     /drone_0_ego_planner_node/goal_reached   Bool          到达通知
 """
 

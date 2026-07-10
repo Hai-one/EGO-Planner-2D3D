@@ -7,6 +7,7 @@
 #include "visualization_msgs/msg/marker.hpp"
 #include "geometry_msgs/msg/pose_stamped.hpp"
 #include "geometry_msgs/msg/twist_stamped.hpp"
+#include "geometry_msgs/msg/twist.hpp"
 #include "tf2/LinearMath/Quaternion.h"
 #include <rclcpp/rclcpp.hpp>
 
@@ -28,6 +29,7 @@ rclcpp::Publisher<quadrotor_msgs::msg::PositionCommand>::SharedPtr pos_cmd_pub;
 rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr pos_setpoint_pub_;
 rclcpp::Publisher<geometry_msgs::msg::TwistStamped>::SharedPtr vel_setpoint_pub_;
 rclcpp::Publisher<std_msgs::msg::Float32>::SharedPtr yaw_setpoint_pub_;
+rclcpp::Publisher<geometry_msgs::msg::Twist>::SharedPtr cmd_vel_pub_;
 
 quadrotor_msgs::msg::PositionCommand cmd;
 geometry_msgs::msg::PoseStamped pos_setpoint_;
@@ -311,6 +313,16 @@ void cmdCallback()
   // 3. 偏航设定点: Float32 [rad]
   yaw_setpoint_.data = yaw_yawdot.first;
   yaw_setpoint_pub_->publish(yaw_setpoint_);
+
+  // 4. cmd_vel 兼容接口: 纯速度指令 (仿 ROS1 move_base)
+  {
+    geometry_msgs::msg::Twist cmd_vel;
+    cmd_vel.linear.x = vel(0);
+    cmd_vel.linear.y = vel(1);
+    cmd_vel.linear.z = vel(2);
+    cmd_vel.angular.z = yaw_yawdot.second;
+    cmd_vel_pub_->publish(cmd_vel);
+  }
 }
 
 int main(int argc, char **argv)
@@ -359,6 +371,8 @@ int main(int argc, char **argv)
       "~/velocity_setpoint", 10);
   yaw_setpoint_pub_ = node->create_publisher<std_msgs::msg::Float32>(
       "~/yaw_setpoint", 10);
+  cmd_vel_pub_ = node->create_publisher<geometry_msgs::msg::Twist>(
+      "~/cmd_vel", 10);
 
   auto cmd_timer = node->create_wall_timer(
       std::chrono::milliseconds(50),
@@ -386,6 +400,7 @@ int main(int argc, char **argv)
   RCLCPP_INFO(node->get_logger(), "    ~/position_setpoint  (geometry_msgs/PoseStamped)");
   RCLCPP_INFO(node->get_logger(), "    ~/velocity_setpoint  (geometry_msgs/TwistStamped)");
   RCLCPP_INFO(node->get_logger(), "    ~/yaw_setpoint       (std_msgs/Float32)");
+  RCLCPP_INFO(node->get_logger(), "    ~/cmd_vel            (geometry_msgs/Twist)  ← move_base style");
   RCLCPP_INFO(node->get_logger(), "    /position_cmd        (quadrotor_msgs/PositionCommand)");
 
   rclcpp::spin(node);
