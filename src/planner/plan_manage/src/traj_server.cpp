@@ -361,7 +361,7 @@ int main(int argc, char **argv)
       "~/yaw_setpoint", 10);
 
   auto cmd_timer = node->create_wall_timer(
-      std::chrono::milliseconds(10),
+      std::chrono::milliseconds(50),
       cmdCallback);
 
   /* control parameter */
