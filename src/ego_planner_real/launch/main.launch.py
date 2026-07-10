@@ -17,7 +17,6 @@
     /drone_0_traj_server/position_setpoint   PoseStamped   20HZ
     /drone_0_traj_server/velocity_setpoint   TwistStamped  20HZ
     /drone_0_traj_server/yaw_setpoint        Float32       20HZ
-    /drone_0_traj_server/cmd_vel             Twist         20HZ    (仿move_base)
     /drone_0_ego_planner_node/goal_reached   Bool          到达通知
 """
 
@@ -269,12 +268,14 @@ def generate_launch_description():
         parameters=[
             {'traj_server/time_forward': 1.0},                  # 偏航前瞻时间 [s]
             {'traj_server/max_deviation': 1.0},                 # 最大偏离 [m], 超过则悬停+平滑收敛
+            {'traj_server/publish_rate': 20.0},                 # 输出频率 [Hz], 间距=速度/频率
             {'traj_server/pos_gain_x': 5.0},                    # 位置增益 X [飞控用]
             {'traj_server/pos_gain_y': 5.0},
             {'traj_server/pos_gain_z': 5.0},
             {'traj_server/vel_gain_x': 2.0},                    # 速度增益 X [飞控用]
             {'traj_server/vel_gain_y': 2.0},
             {'traj_server/vel_gain_z': 2.0},
+            {'traj_server/min_vel': 0.25},                     # 最小输出速度 [m/s], 0=不启用
         ]
     )
 

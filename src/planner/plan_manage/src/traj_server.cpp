@@ -7,7 +7,6 @@
 #include "visualization_msgs/msg/marker.hpp"
 #include "geometry_msgs/msg/pose_stamped.hpp"
 #include "geometry_msgs/msg/twist_stamped.hpp"
-#include "geometry_msgs/msg/twist.hpp"
 #include "tf2/LinearMath/Quaternion.h"
 #include <rclcpp/rclcpp.hpp>
 
@@ -29,7 +28,6 @@ rclcpp::Publisher<quadrotor_msgs::msg::PositionCommand>::SharedPtr pos_cmd_pub;
 rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr pos_setpoint_pub_;
 rclcpp::Publisher<geometry_msgs::msg::TwistStamped>::SharedPtr vel_setpoint_pub_;
 rclcpp::Publisher<std_msgs::msg::Float32>::SharedPtr yaw_setpoint_pub_;
-rclcpp::Publisher<geometry_msgs::msg::Twist>::SharedPtr cmd_vel_pub_;
 
 quadrotor_msgs::msg::PositionCommand cmd;
 geometry_msgs::msg::PoseStamped pos_setpoint_;
@@ -50,6 +48,7 @@ int traj_id_;
 Eigen::Vector3d odom_pos_ = Eigen::Vector3d::Zero();
 bool have_odom_ = false;
 double max_deviation_ = 0.5;  // 允许的最大偏离 [m]
+double min_vel_ = 0.0;         // 最小输出速度 [m/s], 0=不启用; 低于此值的速度被放大
 
 // yaw control
 double last_yaw_, last_yaw_dot_;
@@ -234,6 +233,16 @@ void cmdCallback()
   }
   time_last = time_now;
 
+  // ── 最小速度钳位：低于阈值的速度被放大到 min_vel ──
+  if (min_vel_ > 0.0 && t_cur < traj_duration_ && t_cur >= 0.0)
+  {
+    double vel_mag = vel.norm();
+    if (vel_mag > 0.02 && vel_mag < min_vel_)
+    {
+      vel = vel / vel_mag * min_vel_;  // 保持方向，放大到 min_vel
+    }
+  }
+
   // ── 偏离检测：平滑收敛，避免位置突变 ──
   static Eigen::Vector3d last_target_pos_ = Eigen::Vector3d::Zero();
   if (have_odom_ && receive_traj_)
@@ -313,16 +322,6 @@ void cmdCallback()
   // 3. 偏航设定点: Float32 [rad]
   yaw_setpoint_.data = yaw_yawdot.first;
   yaw_setpoint_pub_->publish(yaw_setpoint_);
-
-  // 4. cmd_vel 兼容接口: 纯速度指令 (仿 ROS1 move_base)
-  {
-    geometry_msgs::msg::Twist cmd_vel;
-    cmd_vel.linear.x = vel(0);
-    cmd_vel.linear.y = vel(1);
-    cmd_vel.linear.z = vel(2);
-    cmd_vel.angular.z = yaw_yawdot.second;
-    cmd_vel_pub_->publish(cmd_vel);
-  }
 }
 
 int main(int argc, char **argv)
@@ -344,6 +343,8 @@ int main(int argc, char **argv)
 
   node->declare_parameter("traj_server/max_deviation", 1.0);
   node->get_parameter("traj_server/max_deviation", max_deviation_);
+  node->declare_parameter("traj_server/min_vel", 0.0);
+  node->get_parameter("traj_server/min_vel", min_vel_);
 
   node->declare_parameter("traj_server/pos_gain_x", 5.0);
   node->declare_parameter("traj_server/pos_gain_y", 5.0);
@@ -371,11 +372,15 @@ int main(int argc, char **argv)
       "~/velocity_setpoint", 10);
   yaw_setpoint_pub_ = node->create_publisher<std_msgs::msg::Float32>(
       "~/yaw_setpoint", 10);
-  cmd_vel_pub_ = node->create_publisher<geometry_msgs::msg::Twist>(
-      "~/cmd_vel", 10);
+
+  double publish_rate = 20.0;
+  node->declare_parameter("traj_server/publish_rate", 20.0);
+  node->get_parameter("traj_server/publish_rate", publish_rate);
+  int interval_ms = static_cast<int>(1000.0 / publish_rate);
+  RCLCPP_INFO(node->get_logger(), "  Publish rate: %.1f Hz (%d ms)", publish_rate, interval_ms);
 
   auto cmd_timer = node->create_wall_timer(
-      std::chrono::milliseconds(50),
+      std::chrono::milliseconds(interval_ms),
       cmdCallback);
 
   /* control parameter */
@@ -400,7 +405,6 @@ int main(int argc, char **argv)
   RCLCPP_INFO(node->get_logger(), "    ~/position_setpoint  (geometry_msgs/PoseStamped)");
   RCLCPP_INFO(node->get_logger(), "    ~/velocity_setpoint  (geometry_msgs/TwistStamped)");
   RCLCPP_INFO(node->get_logger(), "    ~/yaw_setpoint       (std_msgs/Float32)");
-  RCLCPP_INFO(node->get_logger(), "    ~/cmd_vel            (geometry_msgs/Twist)  ← move_base style");
   RCLCPP_INFO(node->get_logger(), "    /position_cmd        (quadrotor_msgs/PositionCommand)");
 
   rclcpp::spin(node);
