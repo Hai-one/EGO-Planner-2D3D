@@ -48,7 +48,9 @@ int traj_id_;
 Eigen::Vector3d odom_pos_ = Eigen::Vector3d::Zero();
 bool have_odom_ = false;
 double max_deviation_ = 0.5;  // 允许的最大偏离 [m]
-double min_vel_ = 0.0;         // 最小输出速度 [m/s], 0=不启用; 低于此值的速度被放大
+
+// 静止时间冻结：飞机没动时 t_cur 不往前走
+Eigen::Vector3d traj_start_pos_ = Eigen::Vector3d::Zero();  // 收到轨迹时的 odom 位置
 
 // yaw control
 double last_yaw_, last_yaw_dot_;
@@ -86,6 +88,7 @@ void bsplineCallback(traj_utils::msg::Bspline::ConstPtr msg)
 
   start_time_ = msg->start_time;
   traj_id_ = msg->traj_id;
+  traj_start_pos_ = odom_pos_;  // 记录轨迹起点（用于静止冻结）
 
   traj_.clear();
   traj_.push_back(pos_traj);
@@ -197,6 +200,17 @@ void cmdCallback()
   // ── 统一时间源：使用节点时钟（与 planner 同步）──
   rclcpp::Time time_now = g_clock_->now();
   double t_cur = (time_now - start_time_).seconds();
+
+  // ── 静止冻结：飞机没动时 t_cur 不往前走，输出恒定速度 ──
+  if (have_odom_)
+  {
+    double moved = (odom_pos_ - traj_start_pos_).norm();
+    if (moved < 0.1)
+    {
+      // 把 t_cur 固定在 0.2s 处（跳过初始瞬态，曲线已稳定）
+      t_cur = std::min(t_cur, 0.2);
+    }
+  }
 
   Eigen::Vector3d pos(Eigen::Vector3d::Zero()), vel(Eigen::Vector3d::Zero()), acc(Eigen::Vector3d::Zero()), pos_f;
   std::pair<double, double> yaw_yawdot(0, 0);
